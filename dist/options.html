@@ -3,36 +3,47 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Google Photos for ChatGPT — Setup</title>
+    <title>Google Photos for ChatGPT</title>
     <script type="module" crossorigin src="./options.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/ui-GP5-j5Bm.css">
+    <link rel="stylesheet" crossorigin href="./assets/ui-YyC6eg-i.css">
   </head>
   <body class="page-body">
-    <main class="setup-card">
-      <h1>OAuth setup</h1>
-      <p>This extension uses only the Google Photos Picker read-only scope. It has no client secret and no server.</p>
+    <main class="setup-card account-page">
+      <div class="brand-row">
+        <div class="photos-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div>
+          <h1 data-i18n="appTitle">Google Photos</h1>
+          <p class="subtitle" data-i18n="appSubtitle">for ChatGPT</p>
+        </div>
+      </div>
 
-      <section>
-        <h2>1. Fixed extension ID</h2>
-        <p>Create a Google OAuth client of type <strong>Chrome Extension</strong> with this Item ID:</p>
-        <div class="copy-row"><code id="extension-id">Loading…</code><button data-copy="extension-id" type="button">Copy</button></div>
+      <section class="connection-card" aria-labelledby="connection-title">
+        <h2 id="connection-title" class="section-title" data-i18n="connectionHeading">Google Photos connection</h2>
+        <div class="connection-row">
+          <span id="connection-dot" class="connection-dot checking" aria-hidden="true"></span>
+          <div>
+            <strong id="connection-status" data-i18n="checkingConnection">Checking Google Photos connection…</strong>
+            <p id="connection-detail" class="connection-detail"></p>
+          </div>
+        </div>
+        <div class="account-actions">
+          <button id="connect" class="primary" type="button" data-i18n="connectGooglePhotos">Connect Google Photos</button>
+          <button id="reconnect" class="secondary" type="button" data-i18n="reconnect" hidden>Reconnect</button>
+          <button id="disconnect" class="quiet danger" type="button" data-i18n="disconnect" hidden>Disconnect Google Photos</button>
+        </div>
       </section>
 
-      <section>
-        <h2>2. Current OAuth client</h2>
-        <div class="copy-row"><code id="client-id">Loading…</code><button data-copy="client-id" type="button">Copy</button></div>
-        <p id="client-state" class="status"></p>
-      </section>
+      <p id="status" class="status" role="status" aria-live="polite" data-i18n="checkingConnection">Checking Google Photos connection…</p>
 
       <section>
-        <h2>3. Configure and rebuild</h2>
-        <p>From the source folder, run:</p>
-        <pre><code>npm run configure-oauth -- "YOUR_CLIENT_ID.apps.googleusercontent.com"
-npm run build</code></pre>
-        <p>Then click Reload for this extension on <code>chrome://extensions</code> or <code>edge://extensions</code>.</p>
+        <h2 data-i18n="privacyPolicy">Privacy Policy</h2>
+        <p data-i18n="privacySummary">Authorization is handled by Chrome and Google Identity. Selected photos are processed in browser memory. The extension has no custom backend, analytics, or telemetry.</p>
+        <div class="policy-links vertical">
+          <a href="https://github.com/chessyuan/google-photos-for-chatgpt/blob/main/PRIVACY.md" target="_blank" rel="noreferrer" data-i18n="privacyPolicy">Privacy Policy</a>
+          <a href="https://github.com/chessyuan/google-photos-for-chatgpt/blob/main/PRIVACY.zh-CN.md" target="_blank" rel="noreferrer" data-i18n="privacyPolicyChinese">隐私政策（简体中文）</a>
+          <a href="https://github.com/chessyuan/google-photos-for-chatgpt#development" target="_blank" rel="noreferrer" data-i18n="developerDocumentation">Developer documentation</a>
+        </div>
       </section>
-
-      <p><a href="https://developers.google.com/photos/picker" target="_blank" rel="noreferrer">Google Photos Picker documentation</a></p>
     </main>
   </body>
 </html>

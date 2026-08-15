@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 
 const EXTENSION_PUBLIC_KEY =
@@ -13,10 +14,10 @@ function manifestPlugin(clientId: string): Plugin {
     generateBundle() {
       const manifest = {
         manifest_version: 3,
-        name: 'Google Photos for ChatGPT',
-        version: '1.0.0',
-        description:
-          'Select cloud photos with the official Google Photos Picker and attach them to ChatGPT without saving to Downloads.',
+        name: '__MSG_extensionName__',
+        version: '1.1.0',
+        description: '__MSG_extensionDescription__',
+        default_locale: 'en',
         minimum_chrome_version: '120',
         key: EXTENSION_PUBLIC_KEY,
         permissions: ['identity', 'storage', 'activeTab', 'alarms'],
@@ -34,7 +35,7 @@ function manifestPlugin(clientId: string): Plugin {
           type: 'module',
         },
         action: {
-          default_title: 'Google Photos for ChatGPT',
+          default_title: '__MSG_extensionName__',
           default_popup: 'popup.html',
         },
         options_page: 'options.html',
@@ -55,6 +56,16 @@ function manifestPlugin(clientId: string): Plugin {
         fileName: 'manifest.json',
         source: JSON.stringify(manifest, null, 2) + '\n',
       })
+      for (const locale of ['en', 'zh_CN']) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `_locales/${locale}/messages.json`,
+          source: readFileSync(
+            resolve(import.meta.dirname, '_locales', locale, 'messages.json'),
+            'utf8',
+          ),
+        })
+      }
     },
   }
 }

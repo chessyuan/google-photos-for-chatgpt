@@ -134,6 +134,15 @@ export interface AttachmentResult {
   performanceEntries?: PerformanceEntry[]
 }
 
+export type GoogleAuthStatus = 'connected' | 'disconnected' | 'error'
+
+export interface GoogleAuthState {
+  status: GoogleAuthStatus
+  connected: boolean
+  message: string
+  reason?: 'required' | 'expired' | 'failed' | 'unsupported'
+}
+
 export type RuntimeRequest =
   | {
       type: 'START_PICKER'
@@ -145,6 +154,9 @@ export type RuntimeRequest =
   | { type: 'WARM_PICKER' }
   | { type: 'GET_JOB'; targetTabId?: number }
   | { type: 'GET_CONFIG' }
+  | { type: 'GET_AUTH_STATE' }
+  | { type: 'CONNECT_AUTH'; force?: boolean }
+  | { type: 'DISCONNECT_AUTH' }
   | { type: 'ATTACH_RESULT'; jobId: string; result: AttachmentResult }
   | { type: 'CANCEL_JOB'; jobId: string }
   | { type: 'CLEAR_AUTH' }
@@ -157,6 +169,7 @@ export type RuntimeResponse =
       extensionId?: string
       clientId?: string
       oauthConfigured?: boolean
+      authState?: GoogleAuthState
       pickerOpened?: boolean
       pickerReused?: boolean
       pickerMode?:

@@ -56,10 +56,22 @@ try {
   let workers = context.serviceWorkers()
   if (workers.length === 0) {
     const bootstrap = await context.newPage()
-    await bootstrap.goto(
-      'chrome-extension://' + expectedExtensionId + '/test.html',
-      { waitUntil: 'domcontentloaded', timeout: 20_000 },
-    )
+    try {
+      await bootstrap.goto(
+        'chrome-extension://' + expectedExtensionId + '/test.html',
+        { waitUntil: 'domcontentloaded', timeout: 20_000 },
+      )
+    } catch (error) {
+      const diagnostics = await context.newPage()
+      await diagnostics.goto('chrome://extensions-internals/')
+      const detail = (await diagnostics.locator('body').innerText()).slice(0, 8000)
+      throw new Error(
+        (error instanceof Error ? error.message : String(error)) +
+          '\nChrome extension diagnostics:\n' +
+          detail,
+        { cause: error },
+      )
+    }
     workers = context.serviceWorkers()
     if (workers.length === 0) {
       workers = [await context.waitForEvent('serviceworker', { timeout: 20_000 })]
@@ -116,10 +128,55 @@ try {
   })
 
   const manifest = await worker.evaluate(() => chrome.runtime.getManifest())
+  const silentIdentityProbe = await worker.evaluate(async () => {
+    try {
+      const result = await chrome.identity.getAuthToken({ interactive: false })
+      return { ok: Boolean(result?.token), detail: 'token-present-without-disclosure' }
+    } catch (error) {
+      return {
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      }
+    }
+  })
+  const optionsPage = await context.newPage()
+  await optionsPage.goto('chrome-extension://' + extensionId + '/options.html')
+  await optionsPage.waitForSelector('#connection-status')
+  await optionsPage.waitForFunction(() => {
+    const dot = document.querySelector('#connection-dot')
+    const detail = document.querySelector('#connection-detail')
+    return (
+      !dot?.classList.contains('checking') &&
+      Boolean(detail?.textContent?.trim())
+    )
+  })
+  const connectionUi = {
+    status: await optionsPage.locator('#connection-status').innerText(),
+    detail: await optionsPage.locator('#connection-detail').innerText(),
+    connectLabel: await optionsPage.locator('#connect').innerText(),
+    connectVisible: await optionsPage.locator('#connect').isVisible(),
+    connectDisabled: await optionsPage.locator('#connect').isDisabled(),
+    reconnectVisible: await optionsPage.locator('#reconnect').isVisible(),
+    disconnectVisible: await optionsPage.locator('#disconnect').isVisible(),
+  }
   const result = {
     extensionId,
     oauthClient: manifest.oauth2?.client_id,
     pickerScope: manifest.oauth2?.scopes?.[0],
+    manifestVersion: manifest.version,
+    defaultLocale: manifest.default_locale,
+    localization: await worker.evaluate(() => ({
+      uiLanguage: chrome.i18n.getUILanguage(),
+      connect: chrome.i18n.getMessage('connectGooglePhotos'),
+      connected: chrome.i18n.getMessage('connected'),
+      disconnect: chrome.i18n.getMessage('disconnect'),
+      authorizationExpired: chrome.i18n.getMessage('authorizationExpired'),
+      browserAuthorizationUnsupported: chrome.i18n.getMessage(
+        'browserAuthorizationUnsupported',
+      ),
+    })),
+    silentIdentityProbe,
+    connectionUi,
     preloadWindowProbe,
     messageSerialization: manifest.message_serialization,
     phaseOnePage: await phaseOne.title(),

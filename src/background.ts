@@ -26,12 +26,16 @@ import { CompletionCoordinator } from './background/completion-coordinator'
 import { streamJobToPort } from './background/download-stream'
 import {
   authorizedFetch,
-  clearAllAccessTokens,
+  connectGooglePhotos,
   createAuthorizedFetchSession,
+  disconnectGooglePhotos,
   getAccessToken,
+  getAccessTokenForUserAction,
+  getGoogleAuthState,
   getManifestClientId,
   isOAuthConfigured,
 } from './background/google-auth'
+import { authorizeAndCreatePickerSession } from './background/picker-authorization'
 import {
   getAllJobs,
   getJob,
@@ -67,6 +71,7 @@ import {
   markPerformance,
   performancePoints,
 } from './shared/performance'
+import { message } from './shared/i18n'
 
 const pickerApi = new PickerApi(authorizedFetch)
 const activePolls = new Set<string>()
@@ -482,25 +487,16 @@ async function takeStandbySession(
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) {
-      return 'Google authorization expired and could not be refreshed. Clear cached authorization and try again.'
+      return message('authorizationExpired')
     }
     if (error.status === 403) {
-      return (
-        error.message +
-        ' Enable Google Photos Picker API, add the Picker scope, and confirm this Google account is an allowed test user.'
-      )
+      return message('googlePhotosPermissionDenied')
     }
     if (error.apiStatus === 'FAILED_PRECONDITION') {
-      return (
-        error.message +
-        ' Confirm the account has an active Google Photos library and that the Picker selection was completed.'
-      )
+      return message('googlePhotosServiceUnavailable')
     }
     if (error.apiStatus === 'RESOURCE_EXHAUSTED') {
-      return (
-        error.message +
-        ' Too many Picker sessions exist. Wait briefly; completed sessions are cleaned up automatically.'
-      )
+      return message('googlePhotosServiceUnavailable')
     }
   }
   return errorMessage(error)
@@ -1105,21 +1101,29 @@ async function beginPicker(
       | 'standby'
       | 'fallback' = standby ? 'standby' : 'fallback'
     if (!pickerUri) {
-      const authStartedAt = performance.now()
-      try {
-        await getAccessToken(true)
-      } finally {
-        debugLatency('auth token latency', authStartedAt)
-      }
-      await updateJob(job, 'creating_session', 'Creating a secure Picker session…')
-
-      const createStartedAt = performance.now()
-      let session
-      try {
-        session = await pickerApi.createSession(job.maxItemCount, false)
-      } finally {
-        debugLatency('session create latency', createStartedAt)
-      }
+      const session = await authorizeAndCreatePickerSession(
+        async () => {
+          const authStartedAt = performance.now()
+          try {
+            await getAccessTokenForUserAction()
+          } finally {
+            debugLatency('auth token latency', authStartedAt)
+          }
+        },
+        async () => {
+          await updateJob(
+            job,
+            'creating_session',
+            message('openingGooglePhotos'),
+          )
+          const createStartedAt = performance.now()
+          try {
+            return await pickerApi.createSession(job.maxItemCount, false)
+          } finally {
+            debugLatency('session create latency', createStartedAt)
+          }
+        },
+      )
       job.sessionId = session.id
       job.expireTime = session.expireTime
       job.pollingConfig = session.pollingConfig
@@ -1241,7 +1245,7 @@ async function startPicker(
     targetKind: kind,
     status: 'authorizing',
     sessionState: 'CREATING',
-    message: 'Requesting Google Photos Picker authorization…',
+    message: message('openingGooglePhotos'),
     createdAt: now,
     updatedAt: now,
     maxItemCount: requestedMaximum,
@@ -1289,6 +1293,9 @@ function isRuntimeRequest(value: unknown): value is RuntimeRequest {
     'WARM_PICKER',
     'GET_JOB',
     'GET_CONFIG',
+    'GET_AUTH_STATE',
+    'CONNECT_AUTH',
+    'DISCONNECT_AUTH',
     'ATTACH_RESULT',
     'CANCEL_JOB',
     'CLEAR_AUTH',
@@ -1318,11 +1325,22 @@ async function handleRequest(
         clientId: getManifestClientId(),
         oauthConfigured: isOAuthConfigured(),
       }
+    case 'GET_AUTH_STATE':
+      return { ok: true, authState: await getGoogleAuthState() }
+    case 'CONNECT_AUTH':
+      if (request.force) {
+        if (standbyCreation) await standbyCreation
+        await discardStandbySession()
+      }
+      await connectGooglePhotos(Boolean(request.force))
+      scheduleStandbyPrewarm(false)
+      return { ok: true, authState: await getGoogleAuthState() }
+    case 'DISCONNECT_AUTH':
     case 'CLEAR_AUTH':
       if (standbyCreation) await standbyCreation
       await discardStandbySession()
-      await clearAllAccessTokens()
-      return { ok: true }
+      await disconnectGooglePhotos()
+      return { ok: true, authState: await getGoogleAuthState() }
     case 'CANCEL_JOB': {
       const job = await getJob(request.jobId)
       if (!job) throw new UserFacingError('Picker job was not found.')

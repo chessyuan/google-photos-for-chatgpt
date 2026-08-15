@@ -15,6 +15,8 @@ const required = [
   'popup.html',
   'options.html',
   'test.html',
+  '_locales/en/messages.json',
+  '_locales/zh_CN/messages.json',
 ]
 
 for (const file of required) {
@@ -26,6 +28,16 @@ const manifest = JSON.parse(
 )
 if (manifest.manifest_version !== 3) {
   throw new Error('dist/manifest.json is not Manifest V3.')
+}
+if (manifest.version !== '1.1.0') {
+  throw new Error('dist manifest is not version 1.1.0.')
+}
+if (
+  manifest.default_locale !== 'en' ||
+  manifest.name !== '__MSG_extensionName__' ||
+  manifest.description !== '__MSG_extensionDescription__'
+) {
+  throw new Error('dist manifest localization metadata is incomplete.')
 }
 if ('message_serialization' in manifest) {
   throw new Error('dist manifest must use Chrome\'s stable JSON message protocol.')
@@ -48,6 +60,31 @@ if (
     'https://www.googleapis.com/auth/photospicker.mediaitems.readonly'
 ) {
   throw new Error('dist manifest does not contain exactly the Picker scope.')
+}
+
+const requiredLocaleKeys = [
+  'connectGooglePhotos',
+  'connected',
+  'reconnect',
+  'disconnect',
+  'authorizationRequired',
+  'authorizationFailed',
+  'authorizationExpired',
+  'authorizationCancelled',
+  'openingGooglePhotos',
+  'ready',
+  'error',
+  'browserAuthorizationUnsupported',
+]
+for (const locale of ['en', 'zh_CN']) {
+  const messages = JSON.parse(
+    await readFile(resolve(dist, '_locales', locale, 'messages.json'), 'utf8'),
+  )
+  for (const key of requiredLocaleKeys) {
+    if (!messages[key]?.message?.trim()) {
+      throw new Error(`dist locale ${locale} is missing ${key}.`)
+    }
+  }
 }
 if (
   manifest.host_permissions?.some((permission) =>
@@ -92,4 +129,8 @@ if (manifest.oauth2.client_id.startsWith('REPLACE_WITH_')) {
   )
 }
 
-console.log('dist verification passed: ' + required.length + ' required files and MV3 Picker scope.')
+console.log(
+  'dist verification passed: ' +
+    required.length +
+    ' required files, MV3 Picker scope, and en/zh_CN localization.',
+)

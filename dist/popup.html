@@ -5,36 +5,55 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Google Photos for ChatGPT</title>
     <script type="module" crossorigin src="./popup.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/ui-GP5-j5Bm.css">
+    <link rel="stylesheet" crossorigin href="./assets/ui-YyC6eg-i.css">
   </head>
   <body class="popup-body">
     <main class="panel">
       <div class="brand-row">
         <div class="photos-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
         <div>
-          <h1>Google Photos</h1>
-          <p class="subtitle">for ChatGPT</p>
+          <h1 data-i18n="appTitle">Google Photos</h1>
+          <p class="subtitle" data-i18n="appSubtitle">for ChatGPT</p>
         </div>
       </div>
 
-      <div id="status" class="status" role="status">Checking the current tab…</div>
+      <section class="connection-card" aria-labelledby="connection-title">
+        <h2 id="connection-title" class="section-title" data-i18n="connectionHeading">Google Photos connection</h2>
+        <div class="connection-row">
+          <span id="connection-dot" class="connection-dot checking" aria-hidden="true"></span>
+          <div>
+            <strong id="connection-status" data-i18n="checkingConnection">Checking Google Photos connection…</strong>
+            <p id="connection-detail" class="connection-detail"></p>
+          </div>
+        </div>
+        <div id="connected-actions" class="compact-actions" hidden>
+          <button id="reconnect" class="quiet compact" type="button" data-i18n="reconnect">Reconnect</button>
+          <button id="disconnect" class="quiet compact danger" type="button" data-i18n="disconnect">Disconnect Google Photos</button>
+        </div>
+      </section>
+
+      <div id="status" class="status" role="status" aria-live="polite" data-i18n="checkingConnection">Checking Google Photos connection…</div>
 
       <label class="field-row" for="max-items">
-        <span>Maximum photos</span>
+        <span data-i18n="maximumPhotos">Maximum photos</span>
         <input id="max-items" type="number" min="1" max="2000" value="50" />
       </label>
 
-      <button id="select-photos" class="primary" type="button" disabled>
-        Select from Google Photos
+      <button id="select-photos" class="primary" type="button" disabled data-i18n="connectGooglePhotos">
+        Connect Google Photos
       </button>
 
+      <nav class="policy-links" aria-label="Policies">
+        <a href="https://github.com/chessyuan/google-photos-for-chatgpt/blob/main/PRIVACY.md" target="_blank" rel="noreferrer" data-i18n="privacyPolicy">Privacy Policy</a>
+        <a href="https://github.com/chessyuan/google-photos-for-chatgpt/blob/main/PRIVACY.zh-CN.md" target="_blank" rel="noreferrer" data-i18n="privacyPolicyChinese">隐私政策（简体中文）</a>
+      </nav>
+
       <details>
-        <summary>Setup &amp; developer tests</summary>
+        <summary data-i18n="developerTests">Developer tests</summary>
         <div class="stack">
-          <button id="open-setup" class="secondary" type="button">OAuth setup</button>
-          <button id="phase-one" class="secondary" type="button">Open Phase 1 test page</button>
-          <button id="phase-two" class="secondary" type="button">Run Phase 2 ChatGPT test</button>
-          <button id="disconnect" class="quiet" type="button">Clear cached Google authorization</button>
+          <button id="open-options" class="secondary" type="button" data-i18n="options">Connection and privacy</button>
+          <button id="phase-one" class="secondary" type="button" data-i18n="phaseOne">Open Phase 1 test page</button>
+          <button id="phase-two" class="secondary" type="button" data-i18n="phaseTwo">Run Phase 2 ChatGPT test</button>
         </div>
       </details>
     </main>

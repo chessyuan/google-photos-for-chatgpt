@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Google Photos for ChatGPT",
-  "version": "1.0.0",
-  "description": "Select cloud photos with the official Google Photos Picker and attach them to ChatGPT without saving to Downloads.",
+  "name": "__MSG_extensionName__",
+  "version": "1.1.0",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArU3i7COCluP1d1w24jyNo/YAES8ZOJCMQY6cfgVkzIv/b06aejPfVk3UgbVqoS31+YVJhf8WssYEzFiZKs8/k/UXnGamhfyC9kE4l1GHp9qSgYGaa0mbDLzgLndkrSPujazWeWFHVF22pdDzgSQ2gMG9yzKUvGDNvO3siNAnbXcd0z1cGtSyn+8XQhLVgM86n3ZSez/xHnnp0etAMUxLVy6dTxU5vVOflT2Npsc9eSVsteEUIgoXjw4wNJYpASHLHjMFLRXQZHzd/A94szX+kW8Oo2qmiK1L5gZN5gZjoES1mZJxbqyTYUkpA5DKOgRKIe+XUJntZw9pgJVxkQsQZQIDAQAB",
   "permissions": [
@@ -27,7 +28,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Google Photos for ChatGPT",
+    "default_title": "__MSG_extensionName__",
     "default_popup": "popup.html"
   },
   "options_page": "options.html",
