@@ -128,3 +128,16 @@ export async function consumeStandbySession(
     return { standby: consumed, storageReadMilliseconds }
   })
 }
+
+export async function consumeStandbyAfterCreation(
+  maxItemCount: number,
+  inFlightCreation: Promise<unknown> | undefined,
+  now = Date.now(),
+): Promise<StandbyConsumeResult> {
+  let result = await consumeStandbySession(maxItemCount, now)
+  if (result.missReason === 'no session' && inFlightCreation) {
+    await inFlightCreation
+    result = await consumeStandbySession(maxItemCount, now)
+  }
+  return result
+}

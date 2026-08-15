@@ -4,6 +4,7 @@ import {
   parseGoogleDuration,
   PickerApi,
 } from './picker-api'
+import type { AuthorizedFetch } from './picker-api'
 
 describe('Picker API helpers', () => {
   it('appends autoclose without losing query parameters', () => {
@@ -71,5 +72,22 @@ describe('Picker API helpers', () => {
     const items = await api.listAllMediaItems('session-1')
     expect(items.map((item) => item.id)).toEqual(['one', 'two'])
     expect(String(request.mock.calls[2]?.[0])).toContain('pageToken=next')
+  })
+
+  it('aborts and reports a product error when the Picker API hangs', async () => {
+    vi.useFakeTimers()
+    const request: AuthorizedFetch = vi.fn(
+      () => new Promise<Response>(() => undefined),
+    )
+    const api = new PickerApi(request, 100)
+
+    const creating = api.createSession(50)
+    const rejected = expect(creating).rejects.toThrow('did not respond in time')
+    await vi.advanceTimersByTimeAsync(100)
+
+    await rejected
+    const init = vi.mocked(request).mock.calls[0]?.[1]
+    expect(init?.signal?.aborted).toBe(true)
+    vi.useRealTimers()
   })
 })

@@ -6,9 +6,11 @@ describe('Picker authorization handoff', () => {
     const events: string[] = []
     const authorize = vi.fn(async () => {
       events.push('authorized')
+      return 'first-auth-token'
     })
-    const createSession = vi.fn(async () => {
+    const createSession = vi.fn(async (token: string) => {
       events.push('session-created')
+      expect(token).toBe('first-auth-token')
       return { id: 'session-1' }
     })
 
@@ -16,6 +18,7 @@ describe('Picker authorization handoff', () => {
       authorizeAndCreatePickerSession(authorize, createSession),
     ).resolves.toEqual({ id: 'session-1' })
     expect(events).toEqual(['authorized', 'session-created'])
+    expect(createSession).toHaveBeenCalledWith('first-auth-token')
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 

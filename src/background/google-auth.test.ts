@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   authorizedFetch,
   connectGooglePhotos,
+  createAuthorizedFetchSession,
   disconnectGooglePhotos,
   getAccessTokenForUserAction,
   getGoogleAuthState,
@@ -124,6 +125,20 @@ describe('Google authorization state', () => {
     await expect(getAccessTokenForUserAction()).resolves.toBe('cached-token')
     expect(getAuthToken).toHaveBeenCalledTimes(1)
     expect(getAuthToken.mock.calls[0]?.[0]).toMatchObject({ interactive: false })
+  })
+
+  it('uses the first authorization token without requesting it again', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = await createAuthorizedFetchSession('first-auth-token')
+    await request('https://example.test')
+
+    expect(getAuthToken).not.toHaveBeenCalled()
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers)
+    expect(headers.get('Authorization')).toBe('Bearer first-auth-token')
   })
 
   it('invalidates a rejected cached token and retries after API 401', async () => {

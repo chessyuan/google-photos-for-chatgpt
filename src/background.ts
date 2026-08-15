@@ -56,7 +56,7 @@ import { SingleFlight } from './background/single-flight'
 import { transitionSessionState } from './background/session-state'
 import {
   clearStandbyPreloadState,
-  consumeStandbySession,
+  consumeStandbyAfterCreation,
   readStandbySession,
   removeStandbySession,
   standbyFromPickingSession,
@@ -77,6 +77,7 @@ const pickerApi = new PickerApi(authorizedFetch)
 const activePolls = new Set<string>()
 const finalizationFlight = new SingleFlight()
 const activePickerApis = new Map<string, Promise<PickerApi>>()
+const activePickerStartsByTab = new Map<number, PickerJob>()
 const completionCoordinator = new CompletionCoordinator()
 const completionProbesUsed = new Set<string>()
 const activeStreams = new Map<string, AbortController>()
@@ -107,6 +108,22 @@ function pickerApiForJob(jobId: string): Promise<PickerApi> {
     activePickerApis.set(jobId, api)
   }
   return api
+}
+
+async function cancelOrphanedPickerStart(job: PickerJob): Promise<boolean> {
+  if (
+    (job.status !== 'authorizing' && job.status !== 'creating_session') ||
+    activePickerStartsByTab.get(job.targetTabId)?.id === job.id
+  ) {
+    return false
+  }
+  transitionJobSession(job, 'CANCELLED')
+  job.status = 'cancelled'
+  job.message = message('pickerOpeningInterrupted')
+  await putJob(job)
+  await closePickerWindow(job)
+  await cleanupSession(job)
+  return true
 }
 
 async function standbyBelongsToActiveJob(
@@ -465,7 +482,10 @@ async function takeStandbySession(
   missReason?: string
 }> {
   await retireLegacyPreloadedPicker()
-  const result = await consumeStandbySession(maxItemCount)
+  const result = await consumeStandbyAfterCreation(
+    maxItemCount,
+    standbyCreation,
+  )
   debugEvent('chrome.storage.session read latency', {
     milliseconds: Number(result.storageReadMilliseconds.toFixed(1)),
   })
@@ -1105,12 +1125,12 @@ async function beginPicker(
         async () => {
           const authStartedAt = performance.now()
           try {
-            await getAccessTokenForUserAction()
+            return await getAccessTokenForUserAction()
           } finally {
             debugLatency('auth token latency', authStartedAt)
           }
         },
-        async () => {
+        async (accessToken) => {
           await updateJob(
             job,
             'creating_session',
@@ -1118,7 +1138,11 @@ async function beginPicker(
           )
           const createStartedAt = performance.now()
           try {
-            return await pickerApi.createSession(job.maxItemCount, false)
+            const jobApi = new PickerApi(
+              await createAuthorizedFetchSession(accessToken),
+            )
+            activePickerApis.set(job.id, Promise.resolve(jobApi))
+            return await jobApi.createSession(job.maxItemCount, false)
           } finally {
             debugLatency('session create latency', createStartedAt)
           }
@@ -1149,6 +1173,7 @@ async function beginPicker(
     void pollSession(job)
     return pickerMode
   } catch (error) {
+    activePickerApis.delete(job.id)
     await failJob(job, error)
     throw error
   }
@@ -1195,7 +1220,10 @@ async function startPicker(
   const { tabId, kind } = await resolveTarget(request, sender)
   const existing = await getLatestJobForTab(tabId)
   if (existing && !terminalStatuses.has(existing.status)) {
-    const disposition = pickerStartDisposition(existing.status)
+    const disposition = pickerStartDisposition(
+      existing.status,
+      activePickerStartsByTab.get(tabId)?.id === existing.id,
+    )
     if (disposition === 'focus-existing') {
       const focused = await focusExistingPicker(
         existing,
@@ -1221,6 +1249,8 @@ async function startPicker(
         pickerOpened: false,
         pickerReused: true,
       }
+    } else {
+      await cancelOrphanedPickerStart(existing)
     }
   }
 
@@ -1238,6 +1268,17 @@ async function startPicker(
     )
   }
 
+  const concurrentStart = activePickerStartsByTab.get(tabId)
+  if (concurrentStart) {
+    return {
+      ok: true,
+      jobId: concurrentStart.id,
+      job: publicJob(concurrentStart),
+      pickerOpened: false,
+      pickerReused: true,
+    }
+  }
+
   const now = Date.now()
   const job: PickerJob = {
     id: crypto.randomUUID(),
@@ -1252,36 +1293,42 @@ async function startPicker(
     warnings: [],
   }
   job.performanceTrace = createPerformanceTrace(job.id, request.clickStartedAt)
-  const taken =
-    kind === 'chatgpt'
-      ? await takeStandbySession(requestedMaximum)
-      : { standby: undefined }
-  const standby = taken.standby
-  if (standby) {
-    job.status = 'picking'
-    job.message =
-      'Google Photos Picker is open. Choose one or more photos and click Done.'
-    job.sessionId = standby.sessionId
-    job.expireTime = standby.expireTime
-    job.pollingConfig = standby.pollingConfig
-    transitionJobSession(job, 'READY')
-    await putJob(job)
-  } else {
+  activePickerStartsByTab.set(tabId, job)
+  try {
     await putJob(job)
     await notifyJob(job)
-  }
-  const pickerMode = await beginPicker(
-    job,
-    request.clickStartedAt,
-    standby,
-  )
-  if (kind === 'chatgpt') scheduleStandbyPrewarm(true)
-  return {
-    ok: true,
-    jobId: job.id,
-    job: publicJob(job),
-    pickerOpened: true,
-    pickerMode,
+    const taken =
+      kind === 'chatgpt'
+        ? await takeStandbySession(requestedMaximum)
+        : { standby: undefined }
+    const standby = taken.standby
+    if (standby) {
+      job.status = 'picking'
+      job.message =
+        'Google Photos Picker is open. Choose one or more photos and click Done.'
+      job.sessionId = standby.sessionId
+      job.expireTime = standby.expireTime
+      job.pollingConfig = standby.pollingConfig
+      transitionJobSession(job, 'READY')
+      await putJob(job)
+    }
+    const pickerMode = await beginPicker(
+      job,
+      request.clickStartedAt,
+      standby,
+    )
+    if (kind === 'chatgpt') scheduleStandbyPrewarm(true)
+    return {
+      ok: true,
+      jobId: job.id,
+      job: publicJob(job),
+      pickerOpened: true,
+      pickerMode,
+    }
+  } finally {
+    if (activePickerStartsByTab.get(tabId)?.id === job.id) {
+      activePickerStartsByTab.delete(tabId)
+    }
   }
 }
 
@@ -1316,6 +1363,7 @@ async function handleRequest(
       const tabId = request.targetTabId ?? sender.tab?.id
       if (tabId === undefined) return { ok: true }
       const job = await getLatestJobForTab(tabId)
+      if (job) await cancelOrphanedPickerStart(job)
       return { ok: true, job: job ? publicJob(job) : undefined }
     }
     case 'GET_CONFIG':
@@ -1577,12 +1625,7 @@ async function resumeJobs(): Promise<void> {
       (job.status === 'authorizing' || job.status === 'creating_session') &&
       !job.sessionId
     ) {
-      await failJob(
-        job,
-        new UserFacingError(
-          'The browser interrupted OAuth or session creation. Start the Picker again.',
-        ),
-      )
+      await cancelOrphanedPickerStart(job)
     }
   }
 }

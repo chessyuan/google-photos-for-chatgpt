@@ -3,6 +3,7 @@ import { STANDBY_SESSION_STORAGE_KEY } from '../shared/constants'
 import type { StandbyPickerSession } from '../shared/types'
 import {
   clearStandbyPreloadState,
+  consumeStandbyAfterCreation,
   consumeStandbySession,
   getStandbyMissReason,
   readStandbySession,
@@ -176,5 +177,33 @@ describe('standby Picker session storage', () => {
     expect(consumed[0]?.used).toBe(true)
     expect((await readStandbySession())?.used).toBe(true)
     expect(results.some((result) => result.missReason === 'used')).toBe(true)
+  })
+
+  it('reuses an in-flight prewarm instead of creating a competing session', async () => {
+    const now = Date.parse('2030-01-01T00:00:00.000Z')
+    let finishCreation: (() => void) | undefined
+    const inFlightCreation = new Promise<void>((resolve) => {
+      finishCreation = () => {
+        stored = {
+          sessionId: 'session-prewarming',
+          pickerUri:
+            'https://photos.google.com/picker/session-prewarming/autoclose',
+          expireTime: '2030-01-01T00:01:00.000Z',
+          createdAt: now,
+          used: false,
+          maxItemCount: 50,
+          ready: false,
+        }
+        resolve()
+      }
+    })
+
+    const consuming = consumeStandbyAfterCreation(50, inFlightCreation, now)
+    await Promise.resolve()
+    finishCreation?.()
+
+    await expect(consuming).resolves.toMatchObject({
+      standby: { sessionId: 'session-prewarming', used: true },
+    })
   })
 })

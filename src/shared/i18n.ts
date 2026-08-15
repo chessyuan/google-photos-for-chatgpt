@@ -34,7 +34,9 @@ export const requiredMessageKeys = [
   'connectComplete',
   'googlePhotosServiceUnavailable',
   'googlePhotosPermissionDenied',
+  'googlePhotosRequestTimedOut',
   'pickerOpeningFailed',
+  'pickerOpeningInterrupted',
   'browserAuthorizationUnsupported',
   'addingPhotos',
   'photosAdded',
@@ -86,8 +88,12 @@ const englishFallbacks: Record<MessageKey, string> = {
     'Google Photos is temporarily unavailable. Please try again.',
   googlePhotosPermissionDenied:
     'Google Photos access is unavailable for this account. Please reconnect or contact the extension maintainer.',
+  googlePhotosRequestTimedOut:
+    'Google Photos did not respond in time. Check your connection and try again.',
   pickerOpeningFailed:
     'Google Photos could not be opened. Please try again.',
+  pickerOpeningInterrupted:
+    'The previous Picker start was interrupted. Click Google Photos to try again.',
   browserAuthorizationUnsupported:
     'This browser does not support Chrome Google authorization for extensions. Use Google Chrome, or wait for an Edge-compatible OAuth build.',
   addingPhotos: 'Adding photos…',

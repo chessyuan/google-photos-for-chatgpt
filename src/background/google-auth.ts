@@ -273,8 +273,10 @@ export type AuthorizedFetch = (
   init?: RequestInit,
 ) => Promise<Response>
 
-export async function createAuthorizedFetchSession(): Promise<AuthorizedFetch> {
-  let token = await getAccessToken(false)
+export async function createAuthorizedFetchSession(
+  initialToken?: string,
+): Promise<AuthorizedFetch> {
+  let token = initialToken ?? (await getAccessToken(false))
   let refresh: Promise<string> | undefined
 
   const refreshToken = async (staleToken: string): Promise<string> => {

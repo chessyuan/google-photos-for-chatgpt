@@ -58,6 +58,10 @@ The extension removes a rejected token from Chrome's identity cache and retries 
 
 ## Picker window does not open
 
+- v1.1.0 reuses the token returned by the first interactive authorization instead of immediately requesting it again.
+- An in-progress standby session is shared with the click flow, preventing two competing `sessions.create` requests.
+- If Chrome restarts the MV3 service worker during startup, the next click discards the orphaned job and retries instead of waiting forever.
+- Picker API requests fail with an actionable timeout after 12 seconds rather than leaving the UI on **Opening Google Photos…** indefinitely.
 - Confirm that browser or enterprise policy allows extensions to create windows.
 - Start from either the extension popup or the icon beside the ChatGPT composer.
 - Inspect the extension service worker from `chrome://extensions` for a sanitized error.
