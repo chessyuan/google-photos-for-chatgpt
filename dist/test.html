@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phase 1 — Google Photos Picker test</title>
+    <script type="module" crossorigin src="./test.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/ui-GP5-j5Bm.css">
+  </head>
+  <body class="page-body">
+    <main class="test-card">
+      <p class="eyebrow">Phase 1</p>
+      <h1>Google Photos → ordinary file input</h1>
+      <p>This page proves the Picker, in-memory byte download, <code>Blob</code>, <code>File[]</code>, and <code>DataTransfer</code> path without ChatGPT.</p>
+
+      <label class="drop-card" for="phase-one-input">
+        <span>Resulting file input</span>
+        <input id="phase-one-input" type="file" multiple accept="image/*" />
+      </label>
+
+      <button id="phase-one-start" class="primary" type="button">Select from Google Photos</button>
+      <div id="phase-one-status" class="status" role="status">Ready.</div>
+      <ul id="phase-one-files" class="file-list"></ul>
+    </main>
+  </body>
+</html>

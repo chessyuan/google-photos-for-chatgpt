@@ -1,0 +1,1 @@
+var e=class extends Error{constructor(e,t){super(e,t),this.name=`UserFacingError`}},t=class extends Error{status;apiStatus;constructor(e,t,n){super(t),this.name=`ApiError`,this.status=e,this.apiStatus=n}};function n(e){return e instanceof Error?e.message:String(e)}export{e as n,n as r,t};

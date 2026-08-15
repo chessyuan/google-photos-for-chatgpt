@@ -1,0 +1,51 @@
+{
+  "name": "google-photos-for-chatgpt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A Chrome extension that lets you pick photos from Google Photos and use them directly in ChatGPT.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chessyuan/google-photos-for-chatgpt.git"
+  },
+  "bugs": {
+    "url": "https://github.com/chessyuan/google-photos-for-chatgpt/issues"
+  },
+  "homepage": "https://github.com/chessyuan/google-photos-for-chatgpt#readme",
+  "keywords": [
+    "google-photos",
+    "chatgpt",
+    "chrome-extension",
+    "browser-extension",
+    "google-photos-picker",
+    "openai",
+    "typescript"
+  ],
+  "scripts": {
+    "configure-oauth": "node scripts/configure-oauth.mjs",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "node scripts/run-vitest.mjs",
+    "build": "vite build && vite build --config vite.content.config.ts",
+    "build:debug": "vite build --mode development && vite build --config vite.content.config.ts --mode development",
+    "benchmark:data-path": "node scripts/benchmark-data-path.mjs",
+    "verify:dist": "node scripts/verify-dist.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/chrome": "0.2.6",
+    "@types/node": "24.10.13",
+    "eslint": "10.8.1",
+    "globals": "17.4.0",
+    "jsdom": "30.0.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vite": "8.2.1",
+    "vitest": "4.1.10"
+  }
+}

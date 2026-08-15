@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Google Photos for ChatGPT</title>
+    <link rel="stylesheet" href="/src/ui.css" />
+  </head>
+  <body class="popup-body">
+    <main class="panel">
+      <div class="brand-row">
+        <div class="photos-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div>
+          <h1>Google Photos</h1>
+          <p class="subtitle">for ChatGPT</p>
+        </div>
+      </div>
+
+      <div id="status" class="status" role="status">Checking the current tab…</div>
+
+      <label class="field-row" for="max-items">
+        <span>Maximum photos</span>
+        <input id="max-items" type="number" min="1" max="2000" value="50" />
+      </label>
+
+      <button id="select-photos" class="primary" type="button" disabled>
+        Select from Google Photos
+      </button>
+
+      <details>
+        <summary>Setup &amp; developer tests</summary>
+        <div class="stack">
+          <button id="open-setup" class="secondary" type="button">OAuth setup</button>
+          <button id="phase-one" class="secondary" type="button">Open Phase 1 test page</button>
+          <button id="phase-two" class="secondary" type="button">Run Phase 2 ChatGPT test</button>
+          <button id="disconnect" class="quiet" type="button">Clear cached Google authorization</button>
+        </div>
+      </details>
+    </main>
+    <script type="module" src="/src/popup.ts"></script>
+  </body>
+</html>

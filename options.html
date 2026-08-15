@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Google Photos for ChatGPT — Setup</title>
+    <link rel="stylesheet" href="/src/ui.css" />
+  </head>
+  <body class="page-body">
+    <main class="setup-card">
+      <h1>OAuth setup</h1>
+      <p>This extension uses only the Google Photos Picker read-only scope. It has no client secret and no server.</p>
+
+      <section>
+        <h2>1. Fixed extension ID</h2>
+        <p>Create a Google OAuth client of type <strong>Chrome Extension</strong> with this Item ID:</p>
+        <div class="copy-row"><code id="extension-id">Loading…</code><button data-copy="extension-id" type="button">Copy</button></div>
+      </section>
+
+      <section>
+        <h2>2. Current OAuth client</h2>
+        <div class="copy-row"><code id="client-id">Loading…</code><button data-copy="client-id" type="button">Copy</button></div>
+        <p id="client-state" class="status"></p>
+      </section>
+
+      <section>
+        <h2>3. Configure and rebuild</h2>
+        <p>From the source folder, run:</p>
+        <pre><code>npm run configure-oauth -- "YOUR_CLIENT_ID.apps.googleusercontent.com"
+npm run build</code></pre>
+        <p>Then click Reload for this extension on <code>chrome://extensions</code> or <code>edge://extensions</code>.</p>
+      </section>
+
+      <p><a href="https://developers.google.com/photos/picker" target="_blank" rel="noreferrer">Google Photos Picker documentation</a></p>
+    </main>
+    <script type="module" src="/src/options.ts"></script>
+  </body>
+</html>
