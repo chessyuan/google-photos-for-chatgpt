@@ -35,20 +35,30 @@ function setStatus(
   status.className = 'status' + (kind === 'info' ? '' : ' ' + kind)
 }
 
+function authDetail(state: GoogleAuthState): string {
+  return state.diagnosticCode
+    ? state.message + '\n' + message('diagnosticCode', state.diagnosticCode)
+    : state.message
+}
+
 function renderAuthState(state: GoogleAuthState): void {
   browserAuthorizationSupported = state.reason !== 'unsupported'
   connectionDot.className = 'connection-dot ' + state.status
-  connect.hidden = state.connected
-  reconnect.hidden = !state.connected
-  disconnect.hidden = !state.connected
+  connect.hidden = state.authorized
+  reconnect.hidden = !state.authorized
+  disconnect.hidden = !state.authorized
   if (state.connected) {
     connectionStatus.textContent = message('connected')
-    connectionDetail.textContent = state.message || message('connectedDetail')
+    connectionDetail.textContent = state.message || message('pickerReadyDetail')
     setStatus(message('ready'), 'success')
+  } else if (state.status === 'checking') {
+    connectionStatus.textContent = message('checkingConnection')
+    connectionDetail.textContent = authDetail(state)
+    setStatus(message('checkingGooglePhotosAccess'))
   } else if (state.status === 'error') {
     connectionStatus.textContent = message('error')
-    connectionDetail.textContent = state.message
-    setStatus(state.message, 'error')
+    connectionDetail.textContent = authDetail(state)
+    setStatus(authDetail(state), 'error')
   } else {
     connectionStatus.textContent = message('connectGooglePhotos')
     connectionDetail.textContent = state.message
@@ -72,10 +82,14 @@ async function runConnection(force: boolean): Promise<void> {
       throw new Error(response.ok ? message('authorizationFailed') : response.error)
     }
     renderAuthState(response.authState)
-    setStatus(
-      force ? message('reconnectComplete') : message('connectComplete'),
-      'success',
-    )
+    if (response.authState.connected) {
+      setStatus(
+        force ? message('reconnectComplete') : message('connectComplete'),
+        'success',
+      )
+    } else {
+      setStatus(authDetail(response.authState), 'error')
+    }
   } catch (error) {
     setStatus(errorMessage(error), 'error')
   } finally {
@@ -105,11 +119,21 @@ disconnect.addEventListener('click', () => {
 
 void (async () => {
   try {
-    const response = await sendRequest({ type: 'GET_AUTH_STATE' })
+    let response = await sendRequest({ type: 'GET_AUTH_STATE' })
     if (!response.ok || !response.authState) {
       throw new Error(response.ok ? message('authorizationFailed') : response.error)
     }
     renderAuthState(response.authState)
+    if (response.authState.status === 'checking') {
+      await sendRequest({ type: 'WARM_PICKER' })
+      response = await sendRequest({ type: 'GET_AUTH_STATE' })
+      if (!response.ok || !response.authState) {
+        throw new Error(
+          response.ok ? message('authorizationFailed') : response.error,
+        )
+      }
+      renderAuthState(response.authState)
+    }
   } catch (error) {
     setStatus(errorMessage(error), 'error')
   }

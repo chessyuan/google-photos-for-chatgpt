@@ -58,16 +58,17 @@ The extension removes a rejected token from Chrome's identity cache and retries 
 
 ## Picker window does not open
 
+- The green **Connected** state now requires both the exact Picker scope and a successful `POST /v1/sessions`; a cached token alone is never shown as connected.
+- If verification fails, copy the displayed `PICKER_API_...` diagnostic code. `403 PERMISSION_DENIED` normally means the Picker API, OAuth client, test-user, publishing, or verification configuration is not usable for that account.
 - v1.1.0 reuses the token returned by the first interactive authorization instead of immediately requesting it again.
 - An in-progress standby session is shared with the click flow, preventing two competing `sessions.create` requests.
 - If Chrome restarts the MV3 service worker during startup, the next click discards the orphaned job and retries instead of waiting forever.
 - Picker API requests fail with an actionable timeout after 12 seconds rather than leaving the UI on **Opening Google Photos…** indefinitely.
+- The extension pre-creates only the official session. It does not open, minimize, hide, or automatically recreate a Google Photos page before a user click.
 - Confirm that browser or enterprise policy allows extensions to create windows.
 - Start from either the extension popup or the icon beside the ChatGPT composer.
 - Inspect the extension service worker from `chrome://extensions` for a sanitized error.
 - Reload the extension and ChatGPT, then retry.
-
-The preload uses an unfocused, minimized popup rather than adding a permanent tab to the main browser window. Closing an unused preloaded popup suppresses immediate recreation, preventing a close/reopen loop.
 
 ## Picker closed or user cancelled
 

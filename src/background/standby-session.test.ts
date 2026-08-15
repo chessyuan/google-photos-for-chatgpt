@@ -127,31 +127,6 @@ describe('standby Picker session storage', () => {
     })
   })
 
-  it('remembers when a user dismisses a preloaded popup', () => {
-    const session: StandbyPickerSession = {
-      sessionId: 'session-dismissed',
-      pickerUri: 'https://photos.google.com/picker/session/autoclose',
-      expireTime: '2030-01-01T00:01:00.000Z',
-      createdAt: 1,
-      used: false,
-      maxItemCount: 50,
-      pickerTabId: 12,
-      pickerWindowId: 34,
-      ready: true,
-      tabStatus: 'complete',
-      preloadPresentation: 'minimized-popup',
-    }
-
-    expect(clearStandbyPreloadState(session, true)).toMatchObject({
-      sessionId: 'session-dismissed',
-      ready: false,
-      preloadDismissed: true,
-    })
-    expect(clearStandbyPreloadState(session, true)).not.toHaveProperty(
-      'pickerWindowId',
-    )
-  })
-
   it('atomically marks a cached session used and never returns it twice', async () => {
     const now = Date.parse('2030-01-01T00:00:00.000Z')
     stored = {

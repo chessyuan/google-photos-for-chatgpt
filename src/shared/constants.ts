@@ -9,6 +9,8 @@ export const JOB_STORAGE_KEY = 'gpfcJobs'
 export const STANDBY_SESSION_STORAGE_KEY = 'gpfcStandbyPickerSession'
 export const STANDBY_SESSION_ALARM = 'gpfcStandbyPickerSessionExpiry'
 export const AUTH_DISCONNECTED_STORAGE_KEY = 'gpfcGoogleAuthDisconnected'
+export const GOOGLE_PHOTOS_READINESS_STORAGE_KEY =
+  'gpfcGooglePhotosReadiness'
 export const DEFAULT_MAX_ITEM_COUNT = 50
 export const MAX_ITEM_COUNT = 2000
 export const JOB_RETENTION_MS = 60 * 60 * 1000

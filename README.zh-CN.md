@@ -29,7 +29,7 @@ v1.1.0 代码已经实现一键 Google 授权，但仅凭 GitHub 源码无法验
 6. 第一次使用时登录并授权自己的 Google 账号。
 7. 选择照片并点击“完成”。
 
-完成一次授权后，后续点击会静默复用 Chrome 已有的 Google 授权，并尽可能直接打开已经预热的选择器。
+完成一次授权后，后续点击会静默复用 Chrome 已有的 Google 授权和预先创建的 standby Picker session。真正可见的 Google 相册页面只会在用户点击后打开。
 
 ## 主要功能
 
@@ -41,7 +41,7 @@ v1.1.0 代码已经实现一键 Google 授权，但仅凭 GitHub 源码无法验
 - Popup 和 Options 提供已连接、重新连接和断开连接状态。
 - 将 OAuth 原始错误转换为普通用户可理解的信息，不显示 token。
 - 图片仅在浏览器内存处理，不主动保存到 Downloads。
-- 保留 standby session、原子消费、过期处理、MV3 alarms 和 Picker 页面预热。
+- 保留 standby session、原子消费、过期处理和 MV3 alarms，但不再创建隐藏的 Google 相册窗口或标签页。
 - 已授权用户优先静默授权，不重复弹出交互式 OAuth。
 - 适配 ChatGPT SPA 重绘，并保留 file input、MutationObserver 和拖放上传策略。
 
@@ -76,7 +76,9 @@ Microsoft 当前官方扩展 API 文档明确说明 Edge 不支持 `identity.get
 
 Popup 和 Options 会显示：
 
-- **已连接**：Chrome 可以静默取得有效授权。
+- **已连接**：Chrome 确认所需 scope，并且一次真实的 Google Photos Picker `sessions.create` 请求已经成功。
+- **正在检查**：账号已经授权，但还没有验证 Picker API 是否可用。
+- **错误**：Picker API 拒绝或无法完成验证，同时显示不含敏感信息的诊断码。
 - **连接 Google 相册**：需要用户主动授权。
 - **重新连接**：重新执行官方授权流程。
 - **断开 Google 相册**：清理本扩展的 Chrome Identity 状态，并在再次连接前停止后台预热。

@@ -8,19 +8,29 @@ import {
   getGoogleAuthState,
   GoogleAuthError,
 } from './google-auth'
-import { AUTH_DISCONNECTED_STORAGE_KEY } from '../shared/constants'
+import {
+  AUTH_DISCONNECTED_STORAGE_KEY,
+  GOOGLE_PHOTOS_READINESS_STORAGE_KEY,
+  PICKER_SCOPE,
+} from '../shared/constants'
 
 const clientId =
   '43154637059-a8t1kbv88cv9kj51edigsluh0gkbvn2m.apps.googleusercontent.com'
+const authorization = (token: string) => ({
+  token,
+  grantedScopes: [PICKER_SCOPE],
+})
 
 describe('Google authorization state', () => {
   let localStorage: Record<string, unknown>
+  let sessionStorage: Record<string, unknown>
   let getAuthToken: ReturnType<typeof vi.fn>
   let removeCachedAuthToken: ReturnType<typeof vi.fn>
   let clearAllCachedAuthTokens: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     localStorage = {}
+    sessionStorage = {}
     getAuthToken = vi.fn()
     removeCachedAuthToken = vi.fn().mockResolvedValue(undefined)
     clearAllCachedAuthTokens = vi.fn().mockResolvedValue(undefined)
@@ -46,6 +56,15 @@ describe('Google authorization state', () => {
             delete localStorage[key]
           }),
         },
+        session: {
+          get: vi.fn(async (key: string) => ({ [key]: sessionStorage[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => {
+            Object.assign(sessionStorage, value)
+          }),
+          remove: vi.fn(async (key: string) => {
+            delete sessionStorage[key]
+          }),
+        },
       },
     })
   })
@@ -55,8 +74,14 @@ describe('Google authorization state', () => {
     vi.restoreAllMocks()
   })
 
-  it('reports connected when a valid cached token is available', async () => {
-    getAuthToken.mockResolvedValue({ token: 'cached-token' })
+  it('reports connected only after the Picker API was verified', async () => {
+    getAuthToken.mockResolvedValue(authorization('cached-token'))
+    sessionStorage[GOOGLE_PHOTOS_READINESS_STORAGE_KEY] = {
+      status: 'ready',
+      checkedAt: 1,
+      message: 'Picker verified',
+      validUntil: '2999-01-01T00:00:00.000Z',
+    }
 
     await expect(getGoogleAuthState()).resolves.toMatchObject({
       status: 'connected',
@@ -65,6 +90,65 @@ describe('Google authorization state', () => {
     expect(getAuthToken).toHaveBeenCalledWith({
       interactive: false,
       enableGranularPermissions: true,
+      scopes: [PICKER_SCOPE],
+    })
+  })
+
+  it('reports checking instead of a false connected state for a token alone', async () => {
+    getAuthToken.mockResolvedValue(authorization('cached-token'))
+
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      status: 'checking',
+      connected: false,
+      authorized: true,
+    })
+  })
+
+  it('reverifies Picker API access after the official session expiry', async () => {
+    getAuthToken.mockResolvedValue(authorization('cached-token'))
+    sessionStorage[GOOGLE_PHOTOS_READINESS_STORAGE_KEY] = {
+      status: 'ready',
+      checkedAt: 1,
+      message: 'Picker verified',
+      validUntil: '2000-01-01T00:00:00.000Z',
+    }
+
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      status: 'checking',
+      connected: false,
+      authorized: true,
+    })
+  })
+
+  it('reports a verified Picker API failure instead of a false connected state', async () => {
+    getAuthToken.mockResolvedValue(authorization('cached-token'))
+    sessionStorage[GOOGLE_PHOTOS_READINESS_STORAGE_KEY] = {
+      status: 'error',
+      checkedAt: 1,
+      message: 'Picker access rejected',
+      diagnosticCode: 'PICKER_API_HTTP_403_PERMISSION_DENIED',
+    }
+
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      status: 'error',
+      connected: false,
+      authorized: true,
+      reason: 'api',
+      diagnosticCode: 'PICKER_API_HTTP_403_PERMISSION_DENIED',
+    })
+  })
+
+  it('rejects a token that does not include the Picker scope', async () => {
+    getAuthToken.mockResolvedValue({
+      token: 'wrong-scope-token',
+      grantedScopes: ['openid'],
+    })
+
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      status: 'error',
+      connected: false,
+      authorized: false,
+      reason: 'scope',
     })
   })
 
@@ -97,7 +181,7 @@ describe('Google authorization state', () => {
   it('continues from silent auth to interactive auth after a user action', async () => {
     getAuthToken
       .mockRejectedValueOnce(new Error('OAuth2 request failed: no token'))
-      .mockResolvedValueOnce({ token: 'new-token' })
+      .mockResolvedValueOnce(authorization('new-token'))
 
     await expect(getAccessTokenForUserAction()).resolves.toBe('new-token')
     expect(getAuthToken.mock.calls.map(([details]) => details.interactive)).toEqual([
@@ -120,7 +204,7 @@ describe('Google authorization state', () => {
   })
 
   it('does not request interactive OAuth for an already-authorized user', async () => {
-    getAuthToken.mockResolvedValue({ token: 'cached-token' })
+    getAuthToken.mockResolvedValue(authorization('cached-token'))
 
     await expect(getAccessTokenForUserAction()).resolves.toBe('cached-token')
     expect(getAuthToken).toHaveBeenCalledTimes(1)
@@ -143,8 +227,8 @@ describe('Google authorization state', () => {
 
   it('invalidates a rejected cached token and retries after API 401', async () => {
     getAuthToken
-      .mockResolvedValueOnce({ token: 'stale-token' })
-      .mockResolvedValueOnce({ token: 'fresh-token' })
+      .mockResolvedValueOnce(authorization('stale-token'))
+      .mockResolvedValueOnce(authorization('fresh-token'))
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response('', { status: 401 }))
@@ -160,7 +244,7 @@ describe('Google authorization state', () => {
 
   it('reports an expired authorization when a 401 refresh cannot get a token', async () => {
     getAuthToken
-      .mockResolvedValueOnce({ token: 'stale-token' })
+      .mockResolvedValueOnce(authorization('stale-token'))
       .mockRejectedValueOnce(new Error('invalid_grant for stale-token'))
     vi.stubGlobal(
       'fetch',
@@ -178,7 +262,7 @@ describe('Google authorization state', () => {
 
   it('reconnects interactively and clears the explicit disconnect flag', async () => {
     localStorage[AUTH_DISCONNECTED_STORAGE_KEY] = true
-    getAuthToken.mockResolvedValue({ token: 'reconnected-token' })
+    getAuthToken.mockResolvedValue(authorization('reconnected-token'))
 
     await connectGooglePhotos(true)
 
@@ -186,6 +270,7 @@ describe('Google authorization state', () => {
     expect(getAuthToken).toHaveBeenCalledWith({
       interactive: true,
       enableGranularPermissions: true,
+      scopes: [PICKER_SCOPE],
     })
     expect(localStorage[AUTH_DISCONNECTED_STORAGE_KEY]).toBeUndefined()
   })

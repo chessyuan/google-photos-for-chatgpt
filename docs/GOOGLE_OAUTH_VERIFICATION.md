@@ -128,7 +128,7 @@ Justification:
 8. Select one or more photos and press **Done**.
 9. Confirm that the Picker closes and the selected images appear in the ChatGPT attachment area.
 10. Do not send the ChatGPT message unless needed for review; attachment appearance proves the extension handoff.
-11. Open the extension popup and confirm **Connected / Google account authorized**.
+11. Open the extension popup and confirm **Connected / Google Photos Picker verified and ready**. This state must appear only after the extension successfully creates a real Picker session.
 12. Click **Disconnect Google Photos**, confirm the UI changes to disconnected, and verify the next user click starts the normal authorization flow again.
 
 Reviewer test account notes: `[OWNER: provide only through Google's secure reviewer field; never commit credentials]`.
@@ -163,7 +163,7 @@ Do not reveal real tokens, private filenames, personal photos, email inboxes, Cl
 - Google consent screen showing app name and requested Picker access.
 - Official Google Photos Picker with safe demonstration media.
 - ChatGPT composer with selected demo photos attached.
-- Popup connected state: **Connected / Google account authorized**.
+- Popup connected state: **Connected / Google Photos Picker verified and ready**.
 - Reconnect and Disconnect controls.
 - Simplified Chinese authorization UI.
 - Google Cloud Audience page showing External and In production.

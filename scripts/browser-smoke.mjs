@@ -83,50 +83,6 @@ try {
   await phaseOne.goto('chrome-extension://' + extensionId + '/test.html')
   await phaseOne.waitForSelector('#phase-one-input')
 
-  const preloadWindowProbe = await worker.evaluate(async () => {
-    const [sourceTab] = await chrome.tabs.query({
-      url: chrome.runtime.getURL('test.html'),
-    })
-    const createdAt = performance.now()
-    const preload = await chrome.windows.create({
-      url: chrome.runtime.getURL('test.html'),
-      type: 'popup',
-      focused: false,
-      state: 'minimized',
-    })
-    if (preload?.id === undefined) throw new Error('Preload probe window missing')
-    if (preload.state !== 'minimized') {
-      await chrome.windows.update(preload.id, { state: 'minimized' })
-    }
-    const [preloadTab] = await chrome.tabs.query({ windowId: preload.id })
-    if (preloadTab?.id === undefined) throw new Error('Preload probe tab missing')
-    const createMilliseconds = performance.now() - createdAt
-    const deadline = Date.now() + 10_000
-    let tab = preloadTab
-    while (tab.status !== 'complete' && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      tab = await chrome.tabs.get(preloadTab.id)
-    }
-    const loadedState = (await chrome.windows.get(preload.id)).state
-    const activatedAt = performance.now()
-    await chrome.windows.update(preload.id, { state: 'normal' })
-    await chrome.windows.update(preload.id, { focused: true })
-    const activationMilliseconds = performance.now() - activatedAt
-    const activatedWindow = await chrome.windows.get(preload.id)
-    await chrome.windows.remove(preload.id)
-    if (sourceTab?.windowId !== undefined) {
-      await chrome.windows.update(sourceTab.windowId, { focused: true })
-    }
-    return {
-      createMilliseconds,
-      loadedState,
-      tabStatus: tab.status,
-      activationMilliseconds,
-      activatedState: activatedWindow.state,
-      activatedFocused: activatedWindow.focused,
-    }
-  })
-
   const manifest = await worker.evaluate(() => chrome.runtime.getManifest())
   const silentIdentityProbe = await worker.evaluate(async () => {
     try {
@@ -177,7 +133,6 @@ try {
     })),
     silentIdentityProbe,
     connectionUi,
-    preloadWindowProbe,
     messageSerialization: manifest.message_serialization,
     phaseOnePage: await phaseOne.title(),
     chatgpt: { available: false },

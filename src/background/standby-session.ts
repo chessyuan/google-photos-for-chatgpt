@@ -72,18 +72,15 @@ export function standbyIsUsable(
 
 export function clearStandbyPreloadState(
   session: StandbyPickerSession,
-  dismissed = false,
 ): StandbyPickerSession {
   const cleared = {
     ...session,
     ready: false,
-    ...(dismissed ? { preloadDismissed: true } : {}),
   }
   delete cleared.pickerTabId
   delete cleared.pickerWindowId
   delete cleared.tabStatus
   delete cleared.preloadPresentation
-  if (!dismissed) delete cleared.preloadDismissed
   return cleared
 }
 

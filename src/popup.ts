@@ -46,20 +46,32 @@ function sendRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
   return chrome.runtime.sendMessage(request) as Promise<RuntimeResponse>
 }
 
+function authDetail(state: GoogleAuthState): string {
+  return state.diagnosticCode
+    ? state.message + '\n' + message('diagnosticCode', state.diagnosticCode)
+    : state.message
+}
+
 function renderAuthState(state: GoogleAuthState): void {
   browserAuthorizationSupported = state.reason !== 'unsupported'
   connectionDot.className = 'connection-dot ' + state.status
-  connectedActions.hidden = !state.connected
-  reconnect.hidden = !state.connected
-  disconnect.hidden = !state.connected
+  connectedActions.hidden = !state.authorized
+  reconnect.hidden = !state.authorized
+  disconnect.hidden = !state.authorized
   if (state.connected) {
     connectionStatus.textContent = message('connected')
-    connectionDetail.textContent = state.message || message('connectedDetail')
+    connectionDetail.textContent = state.message || message('pickerReadyDetail')
+    selectButton.textContent = message('selectFromGooglePhotos')
+  } else if (state.status === 'checking') {
+    connectionStatus.textContent = message('checkingConnection')
+    connectionDetail.textContent = authDetail(state)
     selectButton.textContent = message('selectFromGooglePhotos')
   } else if (state.status === 'error') {
     connectionStatus.textContent = message('error')
-    connectionDetail.textContent = state.message
-    selectButton.textContent = message('connectGooglePhotos')
+    connectionDetail.textContent = authDetail(state)
+    selectButton.textContent = state.authorized
+      ? message('selectFromGooglePhotos')
+      : message('connectGooglePhotos')
   } else {
     connectionStatus.textContent = message('connectGooglePhotos')
     connectionDetail.textContent = state.message
@@ -106,8 +118,15 @@ async function initialize(): Promise<void> {
     if (!config.ok) throw new Error(config.error)
     oauthConfigured = Boolean(config.oauthConfigured)
 
-    const state = await readAuthState()
+    let state = await readAuthState()
     renderAuthState(state)
+
+    if (state.status === 'checking') {
+      setStatus(message('checkingGooglePhotosAccess'))
+      await sendRequest({ type: 'WARM_PICKER' })
+      state = await readAuthState()
+      renderAuthState(state)
+    }
 
     if (!oauthConfigured) {
       setStatus(message('developmentBuildNotConfigured'), 'error')
@@ -143,11 +162,7 @@ selectButton.addEventListener('click', () => {
         clickStartedAt: performance.timeOrigin + performance.now(),
       })
       if (!response.ok) throw new Error(response.error)
-      renderAuthState({
-        status: 'connected',
-        connected: true,
-        message: message('connectedDetail'),
-      })
+      renderAuthState(await readAuthState())
       if (response.job) showJob(response.job)
     } catch (error) {
       setStatus(errorMessage(error), 'error')
@@ -174,7 +189,11 @@ reconnect.addEventListener('click', () => {
         throw new Error(response.ok ? message('authorizationFailed') : response.error)
       }
       renderAuthState(response.authState)
-      setStatus(message('reconnectComplete'), 'success')
+      if (response.authState.connected) {
+        setStatus(message('reconnectComplete'), 'success')
+      } else {
+        setStatus(authDetail(response.authState), 'error')
+      }
     } catch (error) {
       setStatus(errorMessage(error), 'error')
     } finally {

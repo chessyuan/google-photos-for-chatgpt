@@ -30,7 +30,6 @@ export interface StandbyPickerSession {
   ready: boolean
   tabStatus?: 'loading' | 'complete'
   preloadPresentation?: 'minimized-popup'
-  preloadDismissed?: boolean
 }
 
 export interface MediaFileMetadata {
@@ -134,13 +133,25 @@ export interface AttachmentResult {
   performanceEntries?: PerformanceEntry[]
 }
 
-export type GoogleAuthStatus = 'connected' | 'disconnected' | 'error'
+export type GoogleAuthStatus =
+  | 'connected'
+  | 'checking'
+  | 'disconnected'
+  | 'error'
 
 export interface GoogleAuthState {
   status: GoogleAuthStatus
   connected: boolean
+  authorized: boolean
   message: string
-  reason?: 'required' | 'expired' | 'failed' | 'unsupported'
+  reason?:
+    | 'required'
+    | 'expired'
+    | 'scope'
+    | 'api'
+    | 'failed'
+    | 'unsupported'
+  diagnosticCode?: string
 }
 
 export type RuntimeRequest =
@@ -172,11 +183,7 @@ export type RuntimeResponse =
       authState?: GoogleAuthState
       pickerOpened?: boolean
       pickerReused?: boolean
-      pickerMode?:
-        | 'preloaded-ready'
-        | 'preloaded-loading'
-        | 'standby'
-        | 'fallback'
+      pickerMode?: 'standby' | 'fallback'
     }
   | { ok: false; error: string }
 

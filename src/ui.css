@@ -30,9 +30,10 @@ h1 { margin: 0; font-size: 21px; letter-spacing: -0.02em; }
 .section-title { margin:0 0 10px; font-size:13px; color:#4b5563; }
 .connection-row { display:flex; align-items:flex-start; gap:10px; }
 .connection-row strong { display:block; font-size:14px; line-height:1.35; }
-.connection-detail { margin:3px 0 0; color:#6b7280; font-size:12px; line-height:1.4; }
+.connection-detail { margin:3px 0 0; color:#6b7280; font-size:12px; line-height:1.4; white-space:pre-line; }
 .connection-dot { width:9px; height:9px; margin-top:5px; border-radius:50%; flex:0 0 9px; background:#9ca3af; }
 .connection-dot.connected { background:#16a34a; box-shadow:0 0 0 3px rgb(22 163 74 / 0.12); }
+.connection-dot.checking { background:#2563eb; box-shadow:0 0 0 3px rgb(37 99 235 / 0.12); }
 .connection-dot.disconnected { background:#f59e0b; box-shadow:0 0 0 3px rgb(245 158 11 / 0.13); }
 .connection-dot.error { background:#dc2626; box-shadow:0 0 0 3px rgb(220 38 38 / 0.12); }
 .compact-actions { display:flex; gap:7px; margin-top:11px; }

@@ -1,15 +1,21 @@
 import {
   AUTH_DISCONNECTED_STORAGE_KEY,
   OAUTH_PLACEHOLDER_PREFIX,
+  PICKER_SCOPE,
 } from '../shared/constants'
 import { UserFacingError } from '../shared/errors'
 import { message } from '../shared/i18n'
 import type { GoogleAuthState } from '../shared/types'
+import {
+  clearGooglePhotosReadiness,
+  readGooglePhotosReadiness,
+} from './google-photos-readiness'
 
 export type GoogleAuthErrorCode =
   | 'required'
   | 'cancelled'
   | 'expired'
+  | 'scope'
   | 'failed'
   | 'unsupported'
   | 'configuration'
@@ -80,6 +86,8 @@ function publicMessage(code: GoogleAuthErrorCode): string {
       return message('authorizationCancelled')
     case 'expired':
       return message('authorizationExpired')
+    case 'scope':
+      return message('authorizationScopeMissing')
     case 'failed':
       return message('authorizationFailed')
     case 'configuration':
@@ -102,9 +110,14 @@ function asGoogleAuthError(
   )
 }
 
+export interface GoogleAuthorization {
+  token: string
+  grantedScopes: string[]
+}
+
 function normalizeTokenResult(
   result: chrome.identity.GetAuthTokenResult | string,
-): string {
+): GoogleAuthorization {
   const token = typeof result === 'string' ? result : result.token
   if (!token) {
     throw new GoogleAuthError(
@@ -113,7 +126,18 @@ function normalizeTokenResult(
       'Chrome Identity returned no access token.',
     )
   }
-  return token
+  const grantedScopes =
+    typeof result === 'string' ? undefined : result.grantedScopes
+  if (!grantedScopes?.includes(PICKER_SCOPE)) {
+    throw new GoogleAuthError(
+      'scope',
+      publicMessage('scope'),
+      grantedScopes
+        ? 'Chrome Identity did not grant the required Picker scope.'
+        : 'Chrome Identity did not report granted scopes.',
+    )
+  }
+  return { token, grantedScopes: [...grantedScopes] }
 }
 
 async function explicitDisconnectRequested(): Promise<boolean> {
@@ -129,7 +153,9 @@ async function setExplicitDisconnect(disconnected: boolean): Promise<void> {
   }
 }
 
-export async function getAccessToken(interactive: boolean): Promise<string> {
+export async function getGoogleAuthorization(
+  interactive: boolean,
+): Promise<GoogleAuthorization> {
   if (!isOAuthConfigured()) {
     throw new GoogleAuthError(
       'configuration',
@@ -144,25 +170,36 @@ export async function getAccessToken(interactive: boolean): Promise<string> {
     const result = await chrome.identity.getAuthToken({
       interactive,
       enableGranularPermissions: true,
+      scopes: [PICKER_SCOPE],
     })
-    const token = normalizeTokenResult(result)
+    const authorization = normalizeTokenResult(result)
     await setExplicitDisconnect(false)
-    return token
+    return authorization
   } catch (error) {
     throw asGoogleAuthError(error, interactive)
   }
 }
 
-export async function getAccessTokenForUserAction(): Promise<string> {
+export async function getAccessToken(interactive: boolean): Promise<string> {
+  return (await getGoogleAuthorization(interactive)).token
+}
+
+export async function getAuthorizationForUserAction(): Promise<
+  GoogleAuthorization
+> {
   try {
-    return await getAccessToken(false)
+    return await getGoogleAuthorization(false)
   } catch (error) {
     const authError = asGoogleAuthError(error, false)
     if (authError.code !== 'required' && authError.code !== 'expired') {
       throw authError
     }
   }
-  return getAccessToken(true)
+  return getGoogleAuthorization(true)
+}
+
+export async function getAccessTokenForUserAction(): Promise<string> {
+  return (await getAuthorizationForUserAction()).token
 }
 
 export async function clearAccessToken(token: string): Promise<void> {
@@ -190,11 +227,13 @@ async function refreshAccessToken(
 
 export async function connectGooglePhotos(force = false): Promise<void> {
   if (force) await chrome.identity.clearAllCachedAuthTokens()
-  await getAccessToken(true)
+  await clearGooglePhotosReadiness()
+  await getGoogleAuthorization(true)
 }
 
 export async function disconnectGooglePhotos(): Promise<void> {
   await chrome.identity.clearAllCachedAuthTokens()
+  await clearGooglePhotosReadiness()
   await setExplicitDisconnect(true)
 }
 
@@ -207,6 +246,7 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
     return {
       status: 'error',
       connected: false,
+      authorized: false,
       reason: 'failed',
       message: publicMessage('configuration'),
     }
@@ -215,33 +255,67 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
     return {
       status: 'disconnected',
       connected: false,
+      authorized: false,
       reason: 'required',
       message: publicMessage('required'),
     }
   }
   try {
-    await getAccessToken(false)
+    await getGoogleAuthorization(false)
+    const readiness = await readGooglePhotosReadiness()
+    const readinessExpiresAt = readiness?.validUntil
+      ? Date.parse(readiness.validUntil)
+      : Number.NaN
+    if (
+      readiness?.status === 'ready' &&
+      Number.isFinite(readinessExpiresAt) &&
+      readinessExpiresAt > Date.now()
+    ) {
+      return {
+        status: 'connected',
+        connected: true,
+        authorized: true,
+        message: readiness.message || message('pickerReadyDetail'),
+      }
+    }
+    if (readiness?.status === 'error') {
+      return {
+        status: 'error',
+        connected: false,
+        authorized: true,
+        reason: 'api',
+        message: readiness.message,
+        diagnosticCode: readiness.diagnosticCode,
+      }
+    }
     return {
-      status: 'connected',
-      connected: true,
-      message: message('connectedDetail'),
+      status: 'checking',
+      connected: false,
+      authorized: true,
+      message: message('checkingGooglePhotosAccess'),
     }
   } catch (error) {
     const authError = asGoogleAuthError(error, false)
+    const reason: NonNullable<GoogleAuthState['reason']> =
+      authError.code === 'unsupported'
+        ? 'unsupported'
+        : authError.code === 'scope'
+          ? 'scope'
+          : authError.code === 'expired'
+            ? 'expired'
+            : authError.code === 'failed'
+              ? 'failed'
+              : 'required'
     return {
       status:
-        authError.code === 'failed' || authError.code === 'unsupported'
+        authError.code === 'failed' ||
+        authError.code === 'unsupported' ||
+        authError.code === 'scope'
           ? 'error'
           : 'disconnected',
       connected: false,
-      reason:
-        authError.code === 'unsupported'
-          ? 'unsupported'
-          : authError.code === 'expired'
-          ? 'expired'
-          : authError.code === 'failed'
-            ? 'failed'
-            : 'required',
+      authorized: false,
+      reason,
       message: authError.message,
     }
   }

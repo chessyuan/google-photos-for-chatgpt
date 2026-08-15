@@ -4,8 +4,10 @@ export const requiredMessageKeys = [
   'appTitle',
   'appSubtitle',
   'checkingConnection',
+  'checkingGooglePhotosAccess',
   'connected',
   'connectedDetail',
+  'pickerReadyDetail',
   'connectGooglePhotos',
   'reconnect',
   'disconnect',
@@ -13,6 +15,8 @@ export const requiredMessageKeys = [
   'authorizationFailed',
   'authorizationExpired',
   'authorizationCancelled',
+  'authorizationScopeMissing',
+  'diagnosticCode',
   'openingGooglePhotos',
   'ready',
   'error',
@@ -52,8 +56,11 @@ const englishFallbacks: Record<MessageKey, string> = {
   appTitle: 'Google Photos',
   appSubtitle: 'for ChatGPT',
   checkingConnection: 'Checking Google Photos connection…',
+  checkingGooglePhotosAccess:
+    'Google account authorized. Verifying Google Photos Picker access…',
   connected: 'Connected',
   connectedDetail: 'Google account authorized',
+  pickerReadyDetail: 'Google Photos Picker verified and ready',
   connectGooglePhotos: 'Connect Google Photos',
   reconnect: 'Reconnect',
   disconnect: 'Disconnect Google Photos',
@@ -63,6 +70,9 @@ const englishFallbacks: Record<MessageKey, string> = {
   authorizationExpired:
     'Google Photos authorization expired. Please reconnect your Google account.',
   authorizationCancelled: 'Google Photos connection was cancelled.',
+  authorizationScopeMissing:
+    'Google Photos permission was not granted. Reconnect and allow the requested Google Photos access.',
+  diagnosticCode: 'Diagnostic code: $1',
   openingGooglePhotos: 'Opening Google Photos…',
   ready: 'Ready',
   error: 'Error',
@@ -87,7 +97,7 @@ const englishFallbacks: Record<MessageKey, string> = {
   googlePhotosServiceUnavailable:
     'Google Photos is temporarily unavailable. Please try again.',
   googlePhotosPermissionDenied:
-    'Google Photos access is unavailable for this account. Please reconnect or contact the extension maintainer.',
+    'Google Photos Picker access was rejected (403). Reconnect; if it persists, the extension OAuth/API configuration must be fixed by the maintainer.',
   googlePhotosRequestTimedOut:
     'Google Photos did not respond in time. Check your connection and try again.',
   pickerOpeningFailed:

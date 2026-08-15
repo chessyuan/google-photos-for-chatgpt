@@ -71,6 +71,10 @@ const requiredLocaleKeys = [
   'authorizationFailed',
   'authorizationExpired',
   'authorizationCancelled',
+  'authorizationScopeMissing',
+  'checkingGooglePhotosAccess',
+  'pickerReadyDetail',
+  'diagnosticCode',
   'openingGooglePhotos',
   'ready',
   'error',
@@ -121,6 +125,9 @@ for (const path of await walk(dist)) {
 const background = await readFile(resolve(dist, 'background.js'), 'utf8')
 if (/\.tabs\.create\(/.test(background)) {
   throw new Error('Production background must not preload Picker in the main tab strip.')
+}
+if (/state\s*:\s*["']minimized["']/.test(background)) {
+  throw new Error('Production background must not create a hidden/minimized Picker window.')
 }
 
 if (manifest.oauth2.client_id.startsWith('REPLACE_WITH_')) {

@@ -29,7 +29,7 @@ The latest published release remains v1.0.0 while this gate is unresolved.
 6. Sign in to and authorize your Google account the first time.
 7. Pick photos and press **Done**.
 
-After authorization, later clicks silently reuse Chrome's cached Google authorization and open an already-prepared Picker whenever possible.
+After authorization, later clicks silently reuse Chrome's cached Google authorization and a pre-created standby Picker session. The visible Google Photos page is opened only after the user clicks.
 
 ## Features
 
@@ -41,7 +41,7 @@ After authorization, later clicks silently reuse Chrome's cached Google authoriz
 - Connected, reconnect, and disconnect controls in the popup and options page.
 - Product-facing authorization errors without exposing raw OAuth errors or tokens.
 - In-memory image processing; no intentional writes to Downloads.
-- Standby Picker sessions, atomic session consumption, expiration handling, MV3 alarms, and page preload.
+- Standby Picker sessions, atomic session consumption, expiration handling, and MV3 alarms without hidden Google Photos windows or tabs.
 - Fast authorized-user path with silent auth and no repeated interactive consent.
 - SPA redraw recovery and resilient ChatGPT file-input / drag-and-drop attachment strategies.
 - Manifest V3 support in Google Chrome. Microsoft Edge can load the extension UI and ChatGPT integration, but Edge does not implement `chrome.identity.getAuthToken`; Google authorization therefore requires a future Edge-specific `launchWebAuthFlow` build and a compatible OAuth client.
@@ -77,7 +77,9 @@ No second click is required after authorization. On later clicks, the extension 
 
 The popup and options page show:
 
-- **Connected** when Chrome can silently obtain a valid token.
+- **Connected** only after Chrome reports the required scope and a real Google Photos Picker `sessions.create` request succeeds.
+- **Checking** when account authorization exists but Picker API access has not yet been verified.
+- **Error** with a non-sensitive diagnostic code when the Picker API rejects or cannot complete the verification request.
 - **Connect Google Photos** when user interaction is required.
 - **Reconnect** to restart the official authorization flow.
 - **Disconnect Google Photos** to clear the extension's Chrome Identity state and suppress background prewarming until the user connects again.
