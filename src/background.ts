@@ -1173,6 +1173,36 @@ async function startPicker(
   }
 }
 
+async function cancelActiveJobsForAuthorizationChange(): Promise<void> {
+  for (const job of await getAllJobs()) {
+    if (terminalStatuses.has(job.status)) continue
+    if (
+      job.sessionState === 'CONSUMED' ||
+      job.sessionState === 'CANCELLED' ||
+      job.sessionState === 'EXPIRED' ||
+      job.sessionState === 'FAILED'
+    ) {
+      continue
+    }
+    try {
+      transitionJobSession(job, 'CANCELLED')
+      activeStreams.get(job.id)?.abort()
+      await updateJob(
+        job,
+        'cancelled',
+        'Google account connection changed. The previous Picker was closed.',
+      )
+      await closePickerWindow(job)
+      await cleanupSession(job)
+    } catch (error) {
+      debugEvent('could not fully clean up Picker during account change', {
+        jobId: job.id,
+        error: friendlyError(error),
+      })
+    }
+  }
+}
+
 function isRuntimeRequest(value: unknown): value is RuntimeRequest {
   if (!value || typeof value !== 'object' || !('type' in value)) return false
   const type = (value as { type: unknown }).type
@@ -1221,6 +1251,7 @@ async function handleRequest(
     }
     case 'CONNECT_AUTH':
       if (request.force) {
+        await cancelActiveJobsForAuthorizationChange()
         if (standbyCreation) await standbyCreation
         await discardStandbySession()
       }
@@ -1229,6 +1260,7 @@ async function handleRequest(
       return { ok: true, authState: await getGoogleAuthState() }
     case 'DISCONNECT_AUTH':
     case 'CLEAR_AUTH':
+      await cancelActiveJobsForAuthorizationChange()
       if (standbyCreation) await standbyCreation
       await discardStandbySession()
       await disconnectGooglePhotos()

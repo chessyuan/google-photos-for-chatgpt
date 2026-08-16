@@ -10,12 +10,12 @@ The extension has no custom backend, analytics, advertising, or telemetry. It us
 
 ## Google authorization
 
-- Authorization is performed by Chrome's `chrome.identity` API and Google's OAuth service.
+- Authorization is performed by Chrome's `chrome.identity` API and Google's OAuth service. Account changes use Google's official account chooser when the release Web OAuth client is configured.
 - The extension never asks the user to type a Google password into the extension.
 - The extension requests only `https://www.googleapis.com/auth/photospicker.mediaitems.readonly` for Google Photos access.
 - This scope permits the extension to create, inspect, and delete Picker sessions and to list only the media items the user selected for a Picker session.
-- OAuth access tokens are managed by Chrome Identity. The extension does not display tokens to users, transmit them to a project-controlled server, write them to repository files, or store them in `chrome.storage`, `localStorage`, or Downloads.
-- Disconnect clears this extension's Chrome Identity authorization state and stores only a non-sensitive boolean preference so background prewarming remains disabled until the user reconnects.
+- The extension does not display OAuth tokens to users, transmit them to a project-controlled server, write them to repository files, `localStorage`, or Downloads. Chooser-mode access tokens are short-lived and stored only in `chrome.storage.session`, which is limited to the browser session and is not exposed to the ChatGPT content script.
+- Disconnect clears local authorization state, removes the session token, asks Google's official revoke endpoint to revoke it when chooser mode is active, and stores only a non-sensitive boolean preference so background prewarming remains disabled until the user reconnects.
 
 ## Photo data
 
@@ -29,7 +29,7 @@ The extension has no custom backend, analytics, advertising, or telemetry. It us
 
 `chrome.storage.session` may temporarily contain Picker session identifiers, expiration timestamps, polling configuration, window/tab identifiers, transfer metadata, filenames, MIME types, job status, warnings, and performance timestamps. This supports Manifest V3 service-worker recovery and is cleared when the browser session ends.
 
-`chrome.storage.local` stores only the user's explicit disconnected/not-connected preference. It does not store OAuth tokens, photo bytes, Google passwords, or Google account credentials.
+`chrome.storage.local` stores only the user's explicit disconnected/not-connected preference. Chooser mode uses `chrome.storage.session` for its short-lived access token and temporary Picker/job state. No storage area contains a refresh token, Client Secret, photo bytes, Google password, or Google account credentials.
 
 ## Data sharing
 
@@ -44,7 +44,7 @@ The project operator does not receive this data because the project has no backe
 
 ## Retention and deletion
 
-- OAuth tokens remain in Chrome Identity's cache according to Chrome and Google behavior and can be cleared with **Disconnect Google Photos**.
+- Chrome-profile fallback tokens remain in Chrome Identity's cache. Chooser-mode access tokens remain only in `chrome.storage.session`. Both are cleared locally with **Disconnect Google Photos**.
 - Picker sessions are deleted after completion, cancellation, expiration, or failure when cleanup is available. Google also expires Picker sessions server-side.
 - Photo bytes are held only for the active in-memory transfer and are not retained by the extension after the operation or browser context ends.
 - Temporary `chrome.storage.session` data ends with the browser session.

@@ -12,6 +12,7 @@ import {
   AUTH_DISCONNECTED_STORAGE_KEY,
   GOOGLE_PHOTOS_READINESS_STORAGE_KEY,
   PICKER_SCOPE,
+  WEB_OAUTH_STORAGE_KEY,
 } from '../shared/constants'
 
 const clientId =
@@ -92,6 +93,85 @@ describe('Google authorization state', () => {
       enableGranularPermissions: true,
       scopes: [PICKER_SCOPE],
     })
+  })
+
+  it('binds Chrome Identity authorization to the visible Chrome profile account', async () => {
+    chrome.identity.getProfileUserInfo = vi.fn().mockResolvedValue({
+      id: 'gaia-primary',
+      email: 'photos@example.com',
+    })
+    getAuthToken.mockResolvedValue(authorization('profile-token'))
+
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      authorized: true,
+      accountEmail: 'photos@example.com',
+      accountKey: 'chrome:gaia-primary',
+      accountSelection: 'chrome-profile',
+    })
+    expect(getAuthToken).toHaveBeenCalledWith({
+      interactive: false,
+      enableGranularPermissions: true,
+      scopes: [PICKER_SCOPE],
+      account: { id: 'gaia-primary' },
+    })
+  })
+
+  it('uses the official Google account chooser when a Web OAuth client is configured', async () => {
+    const webClientId =
+      '43154637059-accountchooser.apps.googleusercontent.com'
+    vi.stubGlobal('__GPFC_GOOGLE_WEB_CLIENT_ID__', webClientId)
+    chrome.identity.getRedirectURL = vi
+      .fn()
+      .mockReturnValue('https://igacbcmbkglkglkindhcpmagafnboolj.chromiumapp.org/')
+    chrome.identity.launchWebAuthFlow = vi.fn(
+      async ({ url }: chrome.identity.WebAuthFlowDetails) => {
+        const authorizationUrl = new URL(url)
+        expect(authorizationUrl.searchParams.get('client_id')).toBe(webClientId)
+        expect(authorizationUrl.searchParams.get('prompt')).toBe(
+          'select_account',
+        )
+        expect(authorizationUrl.searchParams.get('scope')).toBe(PICKER_SCOPE)
+        const state = authorizationUrl.searchParams.get('state')
+        return (
+          'https://igacbcmbkglkglkindhcpmagafnboolj.chromiumapp.org/#' +
+          new URLSearchParams({
+            access_token: 'chooser-token',
+            expires_in: '3600',
+            scope: PICKER_SCOPE,
+            state: state ?? '',
+          })
+        )
+      },
+    )
+
+    await connectGooglePhotos(true)
+
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+    expect(getAuthToken).not.toHaveBeenCalled()
+    expect(sessionStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({
+      token: 'chooser-token',
+      grantedScopes: [PICKER_SCOPE],
+    })
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      authorized: true,
+      accountSelection: 'google-chooser',
+    })
+  })
+
+  it('reports chooser mode as disconnected when no session token exists', async () => {
+    vi.stubGlobal(
+      '__GPFC_GOOGLE_WEB_CLIENT_ID__',
+      '43154637059-accountchooser.apps.googleusercontent.com',
+    )
+
+    await expect(getGoogleAuthState()).resolves.toMatchObject({
+      status: 'disconnected',
+      connected: false,
+      authorized: false,
+      reason: 'required',
+      accountSelection: 'google-chooser',
+    })
+    expect(getAuthToken).not.toHaveBeenCalled()
   })
 
   it('reports checking instead of a false connected state for a token alone', async () => {

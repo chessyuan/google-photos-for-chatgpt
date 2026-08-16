@@ -2,6 +2,7 @@ import {
   AUTH_DISCONNECTED_STORAGE_KEY,
   OAUTH_PLACEHOLDER_PREFIX,
   PICKER_SCOPE,
+  WEB_OAUTH_STORAGE_KEY,
 } from '../shared/constants'
 import { UserFacingError } from '../shared/errors'
 import { message } from '../shared/i18n'
@@ -44,10 +45,10 @@ export function getManifestClientId(): string {
 
 export function isOAuthConfigured(): boolean {
   const clientId = getManifestClientId()
-  return (
+  const chromeClientConfigured =
     clientId.endsWith('.apps.googleusercontent.com') &&
     !clientId.startsWith(OAUTH_PLACEHOLDER_PREFIX)
-  )
+  return chromeClientConfigured || isGoogleAccountChooserConfigured()
 }
 
 function sanitizeTechnicalDetail(error: unknown): string {
@@ -113,10 +114,45 @@ function asGoogleAuthError(
 export interface GoogleAuthorization {
   token: string
   grantedScopes: string[]
+  accountEmail?: string
+  accountKey?: string
+  provider: 'chrome-profile' | 'google-chooser'
+}
+
+interface StoredWebAuthorization {
+  token: string
+  grantedScopes: string[]
+  expiresAt: number
+  selectedAt: number
+}
+
+interface RuntimeWebOAuthConfig {
+  __GPFC_GOOGLE_WEB_CLIENT_ID__?: string
+}
+
+interface ChromeProfileAccount {
+  id: string
+  email?: string
+}
+
+export function getWebOAuthClientId(): string {
+  return (
+    (globalThis as typeof globalThis & RuntimeWebOAuthConfig)
+      .__GPFC_GOOGLE_WEB_CLIENT_ID__?.trim() ?? ''
+  )
+}
+
+export function isGoogleAccountChooserConfigured(): boolean {
+  const clientId = getWebOAuthClientId()
+  return (
+    clientId.endsWith('.apps.googleusercontent.com') &&
+    !clientId.startsWith(OAUTH_PLACEHOLDER_PREFIX)
+  )
 }
 
 function normalizeTokenResult(
   result: chrome.identity.GetAuthTokenResult | string,
+  account?: ChromeProfileAccount,
 ): GoogleAuthorization {
   const token = typeof result === 'string' ? result : result.token
   if (!token) {
@@ -137,7 +173,167 @@ function normalizeTokenResult(
         : 'Chrome Identity did not report granted scopes.',
     )
   }
-  return { token, grantedScopes: [...grantedScopes] }
+  return {
+    token,
+    grantedScopes: [...grantedScopes],
+    accountEmail: account?.email,
+    accountKey: account?.id ? 'chrome:' + account.id : undefined,
+    provider: 'chrome-profile',
+  }
+}
+
+async function getChromeProfileAccount(): Promise<
+  ChromeProfileAccount | undefined
+> {
+  if (typeof chrome.identity.getProfileUserInfo !== 'function') return undefined
+  try {
+    const profile = await chrome.identity.getProfileUserInfo({
+      accountStatus: 'ANY',
+    })
+    if (!profile.id) return undefined
+    return { id: profile.id, email: profile.email || undefined }
+  } catch {
+    return undefined
+  }
+}
+
+async function readStoredWebAuthorization(): Promise<
+  StoredWebAuthorization | undefined
+> {
+  const stored = await chrome.storage.session.get(WEB_OAUTH_STORAGE_KEY)
+  return stored[WEB_OAUTH_STORAGE_KEY] as StoredWebAuthorization | undefined
+}
+
+async function clearStoredWebAuthorization(token?: string): Promise<void> {
+  if (token) {
+    const current = await readStoredWebAuthorization()
+    if (current?.token !== token) return
+  }
+  await chrome.storage.session.remove(WEB_OAUTH_STORAGE_KEY)
+}
+
+async function getStoredWebAuthorization(): Promise<GoogleAuthorization> {
+  const stored = await readStoredWebAuthorization()
+  if (!stored) {
+    throw new GoogleAuthError('required', publicMessage('required'))
+  }
+  return normalizeWebAuthorization(stored)
+}
+
+function normalizeWebAuthorization(
+  stored: StoredWebAuthorization,
+): GoogleAuthorization {
+  if (!stored.grantedScopes.includes(PICKER_SCOPE)) {
+    throw new GoogleAuthError(
+      'scope',
+      publicMessage('scope'),
+      'Google OAuth did not grant the required Picker scope.',
+    )
+  }
+  if (!stored.token || stored.expiresAt <= Date.now() + 30_000) {
+    throw new GoogleAuthError(
+      'expired',
+      publicMessage('expired'),
+      'The account-chooser access token is missing or expired.',
+    )
+  }
+  return {
+    token: stored.token,
+    grantedScopes: [...stored.grantedScopes],
+    accountKey: 'chooser:' + stored.selectedAt,
+    provider: 'google-chooser',
+  }
+}
+
+function oauthResponseParameters(url: URL): URLSearchParams {
+  const fragment = new URLSearchParams(url.hash.replace(/^#/, ''))
+  if (fragment.size > 0) return fragment
+  return url.searchParams
+}
+
+async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization> {
+  const clientId = getWebOAuthClientId()
+  if (!isGoogleAccountChooserConfigured()) {
+    throw new GoogleAuthError(
+      'configuration',
+      publicMessage('configuration'),
+      'A Web application OAuth Client ID is required for account selection.',
+    )
+  }
+
+  const redirectUri = chrome.identity.getRedirectURL()
+  const state = crypto.randomUUID()
+  const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+  authorizationUrl.searchParams.set('client_id', clientId)
+  authorizationUrl.searchParams.set('redirect_uri', redirectUri)
+  authorizationUrl.searchParams.set('response_type', 'token')
+  authorizationUrl.searchParams.set('scope', PICKER_SCOPE)
+  authorizationUrl.searchParams.set('prompt', 'select_account')
+  authorizationUrl.searchParams.set('include_granted_scopes', 'false')
+  authorizationUrl.searchParams.set('state', state)
+
+  let redirectedTo: string | undefined
+  try {
+    redirectedTo = await chrome.identity.launchWebAuthFlow({
+      url: authorizationUrl.toString(),
+      interactive: true,
+    })
+  } catch (error) {
+    throw asGoogleAuthError(error, true)
+  }
+  if (!redirectedTo) {
+    throw new GoogleAuthError('cancelled', publicMessage('cancelled'))
+  }
+
+  const resultUrl = new URL(redirectedTo)
+  const redirectUrl = new URL(redirectUri)
+  if (resultUrl.origin !== redirectUrl.origin) {
+    throw new GoogleAuthError(
+      'failed',
+      publicMessage('failed'),
+      'Google OAuth returned to an unexpected origin.',
+    )
+  }
+  const response = oauthResponseParameters(resultUrl)
+  if (response.get('state') !== state) {
+    throw new GoogleAuthError(
+      'failed',
+      publicMessage('failed'),
+      'Google OAuth state verification failed.',
+    )
+  }
+  const oauthError = response.get('error')
+  if (oauthError) {
+    const code = oauthError === 'access_denied' ? 'cancelled' : 'failed'
+    throw new GoogleAuthError(
+      code,
+      publicMessage(code),
+      'Google OAuth error: ' + oauthError,
+    )
+  }
+
+  const token = response.get('access_token') ?? ''
+  const grantedScopes = (response.get('scope') ?? '')
+    .split(/\s+/)
+    .filter(Boolean)
+  const expiresIn = Number(response.get('expires_in'))
+  if (!token || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new GoogleAuthError(
+      'failed',
+      publicMessage('failed'),
+      'Google OAuth returned an incomplete access token response.',
+    )
+  }
+
+  const stored: StoredWebAuthorization = {
+    token,
+    grantedScopes,
+    expiresAt: Date.now() + expiresIn * 1000,
+    selectedAt: Date.now(),
+  }
+  const authorization = normalizeWebAuthorization(stored)
+  await chrome.storage.session.set({ [WEB_OAUTH_STORAGE_KEY]: stored })
+  return authorization
 }
 
 async function explicitDisconnectRequested(): Promise<boolean> {
@@ -166,13 +362,28 @@ export async function getGoogleAuthorization(
     throw new GoogleAuthError('required', publicMessage('required'))
   }
 
+  if (isGoogleAccountChooserConfigured()) {
+    try {
+      const authorization = interactive
+        ? await authorizeWithGoogleAccountChooser()
+        : await getStoredWebAuthorization()
+      await setExplicitDisconnect(false)
+      return authorization
+    } catch (error) {
+      throw asGoogleAuthError(error, interactive)
+    }
+  }
+
   try {
-    const result = await chrome.identity.getAuthToken({
+    const account = await getChromeProfileAccount()
+    const details: chrome.identity.TokenDetails = {
       interactive,
       enableGranularPermissions: true,
       scopes: [PICKER_SCOPE],
-    })
-    const authorization = normalizeTokenResult(result)
+    }
+    if (account?.id) details.account = { id: account.id }
+    const result = await chrome.identity.getAuthToken(details)
+    const authorization = normalizeTokenResult(result, account)
     await setExplicitDisconnect(false)
     return authorization
   } catch (error) {
@@ -203,6 +414,10 @@ export async function getAccessTokenForUserAction(): Promise<string> {
 }
 
 export async function clearAccessToken(token: string): Promise<void> {
+  if (isGoogleAccountChooserConfigured()) {
+    await clearStoredWebAuthorization(token)
+    return
+  }
   await chrome.identity.removeCachedAuthToken({ token })
 }
 
@@ -226,13 +441,35 @@ async function refreshAccessToken(
 }
 
 export async function connectGooglePhotos(force = false): Promise<void> {
-  if (force) await chrome.identity.clearAllCachedAuthTokens()
+  if (force) {
+    if (isGoogleAccountChooserConfigured()) {
+      await clearStoredWebAuthorization()
+    } else {
+      await chrome.identity.clearAllCachedAuthTokens()
+    }
+  }
   await clearGooglePhotosReadiness()
   await getGoogleAuthorization(true)
 }
 
 export async function disconnectGooglePhotos(): Promise<void> {
-  await chrome.identity.clearAllCachedAuthTokens()
+  if (isGoogleAccountChooserConfigured()) {
+    const authorization = await readStoredWebAuthorization()
+    await clearStoredWebAuthorization()
+    if (authorization?.token) {
+      try {
+        await fetch('https://oauth2.googleapis.com/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: authorization.token }),
+        })
+      } catch {
+        // Local disconnect must still succeed if Google's revoke endpoint is offline.
+      }
+    }
+  } else {
+    await chrome.identity.clearAllCachedAuthTokens()
+  }
   await clearGooglePhotosReadiness()
   await setExplicitDisconnect(true)
 }
@@ -242,6 +479,10 @@ export async function clearAllAccessTokens(): Promise<void> {
 }
 
 export async function getGoogleAuthState(): Promise<GoogleAuthState> {
+  const accountSelection: GoogleAuthState['accountSelection'] =
+    isGoogleAccountChooserConfigured()
+    ? 'google-chooser'
+    : 'chrome-profile'
   if (!isOAuthConfigured()) {
     return {
       status: 'error',
@@ -249,6 +490,7 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
       authorized: false,
       reason: 'failed',
       message: publicMessage('configuration'),
+      accountSelection,
     }
   }
   if (await explicitDisconnectRequested()) {
@@ -258,10 +500,16 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
       authorized: false,
       reason: 'required',
       message: publicMessage('required'),
+      accountSelection,
     }
   }
   try {
-    await getGoogleAuthorization(false)
+    const authorization = await getGoogleAuthorization(false)
+    const account = {
+      accountEmail: authorization.accountEmail,
+      accountKey: authorization.accountKey,
+      accountSelection,
+    }
     const readiness = await readGooglePhotosReadiness()
     const readinessExpiresAt = readiness?.validUntil
       ? Date.parse(readiness.validUntil)
@@ -276,6 +524,7 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
         connected: true,
         authorized: true,
         message: readiness.message || message('pickerReadyDetail'),
+        ...account,
       }
     }
     if (readiness?.status === 'error') {
@@ -286,6 +535,7 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
         reason: 'api',
         message: readiness.message,
         diagnosticCode: readiness.diagnosticCode,
+        ...account,
       }
     }
     return {
@@ -293,6 +543,7 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
       connected: false,
       authorized: true,
       message: message('checkingGooglePhotosAccess'),
+      ...account,
     }
   } catch (error) {
     const authError = asGoogleAuthError(error, false)
@@ -317,6 +568,7 @@ export async function getGoogleAuthState(): Promise<GoogleAuthState> {
       authorized: false,
       reason,
       message: authError.message,
+      accountSelection,
     }
   }
 }

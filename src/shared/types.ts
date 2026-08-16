@@ -30,6 +30,7 @@ export interface StandbyPickerSession {
   ready: boolean
   tabStatus?: 'loading' | 'complete'
   preloadPresentation?: 'minimized-popup'
+  accountKey?: string
 }
 
 export interface MediaFileMetadata {
@@ -144,6 +145,9 @@ export interface GoogleAuthState {
   connected: boolean
   authorized: boolean
   message: string
+  accountEmail?: string
+  accountKey?: string
+  accountSelection: 'google-chooser' | 'chrome-profile'
   reason?:
     | 'required'
     | 'expired'

@@ -8,6 +8,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArU3i7COCluP1d1w24jyNo/YAES8ZOJCMQY6cfgVkzIv/b06aejPfVk3UgbVqoS31+YVJhf8WssYEzFiZKs8/k/UXnGamhfyC9kE4l1GHp9qSgYGaa0mbDLzgLndkrSPujazWeWFHVF22pdDzgSQ2gMG9yzKUvGDNvO3siNAnbXcd0z1cGtSyn+8XQhLVgM86n3ZSez/xHnnp0etAMUxLVy6dTxU5vVOflT2Npsc9eSVsteEUIgoXjw4wNJYpASHLHjMFLRXQZHzd/A94szX+kW8Oo2qmiK1L5gZN5gZjoES1mZJxbqyTYUkpA5DKOgRKIe+XUJntZw9pgJVxkQsQZQIDAQAB",
   "permissions": [
     "identity",
+    "identity.email",
     "storage",
     "activeTab",
     "alarms"
@@ -15,6 +16,7 @@
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://photospicker.googleapis.com/*",
+    "https://oauth2.googleapis.com/*",
     "https://lh3.googleusercontent.com/*"
   ],
   "oauth2": {

@@ -47,9 +47,22 @@ function sendRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
 }
 
 function authDetail(state: GoogleAuthState): string {
-  return state.diagnosticCode
+  const account = state.accountEmail
+    ? message(
+        state.accountSelection === 'google-chooser'
+          ? 'connectedAccount'
+          : 'currentChromeAccount',
+        state.accountEmail,
+      )
+    : state.accountSelection === 'google-chooser' && state.authorized
+      ? message('selectedGoogleAccount')
+      : state.authorized
+        ? message('currentChromeAccountUnknown')
+        : ''
+  const detail = state.diagnosticCode
     ? state.message + '\n' + message('diagnosticCode', state.diagnosticCode)
     : state.message
+  return account ? account + '\n' + detail : detail
 }
 
 function renderAuthState(state: GoogleAuthState): void {
@@ -58,9 +71,14 @@ function renderAuthState(state: GoogleAuthState): void {
   connectedActions.hidden = !state.authorized
   reconnect.hidden = !state.authorized
   disconnect.hidden = !state.authorized
+  reconnect.textContent = message(
+    state.accountSelection === 'google-chooser'
+      ? 'chooseAnotherAccount'
+      : 'reconnectChromeAccount',
+  )
   if (state.connected) {
     connectionStatus.textContent = message('connected')
-    connectionDetail.textContent = state.message || message('pickerReadyDetail')
+    connectionDetail.textContent = authDetail(state)
     selectButton.textContent = message('selectFromGooglePhotos')
   } else if (state.status === 'checking') {
     connectionStatus.textContent = message('checkingConnection')

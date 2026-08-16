@@ -8,13 +8,19 @@ The extension never asks you to copy a token, enter a Client ID, create a Google
 
 ## Authorization expired or failed
 
-Use **Reconnect** in the popup or options page. The extension clears its Chrome Identity state and starts the official Google authorization flow after your click.
+Use **Choose another Google account** in the popup or options page. A correctly configured release opens Google's official account chooser. If the button says **Reconnect current Chrome account**, that developer build has no account-chooser Web OAuth client and cannot honestly switch away from the current Chrome profile account.
+
+## Picker opens but the library is empty
+
+Google Photos Picker sessions are tied to the Google account that authorized the session. An empty Picker with Google Photos onboarding normally means the selected account has no Google Photos library; it is not proof that `sessions.create` failed.
+
+Open the extension popup and check the account line. Use **Choose another Google account**, select the account that actually contains the photos, and wait for the Picker-ready state before reopening it. The extension discards the old standby session before account selection so a session from the previous account cannot be reused.
 
 If Google says the app is unavailable to your account, the maintainer's OAuth app may still be in Testing or awaiting verification. Ordinary users cannot fix that locally and should not create or paste credentials. See the repository release status or contact the maintainer.
 
 ## Disconnect Google Photos
 
-**Disconnect Google Photos** clears this extension's Chrome Identity state, removes any standby Picker session, and suppresses background prewarming until you connect again. It does not store or transmit a token.
+**Disconnect Google Photos** clears local authorization state, removes any standby Picker session, revokes the chooser-mode token through Google's official endpoint when available, and suppresses background prewarming until you connect again. No token is sent to a project-controlled server.
 
 ## Developer build: OAuth is not configured
 

@@ -6,6 +6,8 @@ import { resolve } from 'node:path'
 const expectedExtensionId = 'igacbcmbkglkglkindhcpmagafnboolj'
 const expectedOAuthClient =
   '43154637059-a8t1kbv88cv9kj51edigsluh0gkbvn2m.apps.googleusercontent.com'
+const expectedWebOAuthClient =
+  '43154637059-t2no9fsmb7rmn2pnd1d6p6dlvroga1q0.apps.googleusercontent.com'
 
 const dist = resolve(process.cwd(), 'dist')
 const required = [
@@ -123,6 +125,16 @@ for (const path of await walk(dist)) {
 }
 
 const background = await readFile(resolve(dist, 'background.js'), 'utf8')
+if (!background.includes(expectedWebOAuthClient)) {
+  throw new Error(
+    'Production background does not contain the expected account-chooser Web OAuth Client ID.',
+  )
+}
+if (!background.includes('select_account')) {
+  throw new Error(
+    'Production background does not contain the Google account chooser prompt.',
+  )
+}
 if (/\.tabs\.create\(/.test(background)) {
   throw new Error('Production background must not preload Picker in the main tab strip.')
 }

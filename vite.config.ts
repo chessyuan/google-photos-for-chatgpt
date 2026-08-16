@@ -20,10 +20,17 @@ function manifestPlugin(clientId: string): Plugin {
         default_locale: 'en',
         minimum_chrome_version: '120',
         key: EXTENSION_PUBLIC_KEY,
-        permissions: ['identity', 'storage', 'activeTab', 'alarms'],
+        permissions: [
+          'identity',
+          'identity.email',
+          'storage',
+          'activeTab',
+          'alarms',
+        ],
         host_permissions: [
           'https://chatgpt.com/*',
           'https://photospicker.googleapis.com/*',
+          'https://oauth2.googleapis.com/*',
           'https://lh3.googleusercontent.com/*',
         ],
         oauth2: {
@@ -75,10 +82,14 @@ export default defineConfig(({ mode }) => {
   const clientId =
     env.GPFC_GOOGLE_CLIENT_ID?.trim() ||
     'REPLACE_WITH_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com'
+  const webClientId = env.GPFC_GOOGLE_WEB_CLIENT_ID?.trim() ?? ''
 
   return {
     base: './',
     plugins: [manifestPlugin(clientId)],
+    define: {
+      'globalThis.__GPFC_GOOGLE_WEB_CLIENT_ID__': JSON.stringify(webClientId),
+    },
     build: {
       outDir: 'dist',
       emptyOutDir: true,

@@ -10,6 +10,12 @@ export const requiredMessageKeys = [
   'pickerReadyDetail',
   'connectGooglePhotos',
   'reconnect',
+  'chooseAnotherAccount',
+  'reconnectChromeAccount',
+  'connectedAccount',
+  'selectedGoogleAccount',
+  'currentChromeAccount',
+  'currentChromeAccountUnknown',
   'disconnect',
   'authorizationRequired',
   'authorizationFailed',
@@ -63,6 +69,14 @@ const englishFallbacks: Record<MessageKey, string> = {
   pickerReadyDetail: 'Google Photos Picker verified and ready',
   connectGooglePhotos: 'Connect Google Photos',
   reconnect: 'Reconnect',
+  chooseAnotherAccount: 'Choose another Google account',
+  reconnectChromeAccount: 'Reconnect current Chrome account',
+  connectedAccount: 'Account: $1',
+  selectedGoogleAccount:
+    'Using the account selected in the official Google sign-in window.',
+  currentChromeAccount: 'Using Chrome profile account: $1',
+  currentChromeAccountUnknown:
+    'Using the current Chrome profile Google account.',
   disconnect: 'Disconnect Google Photos',
   authorizationRequired: 'Connect your Google account to use Google Photos.',
   authorizationFailed:

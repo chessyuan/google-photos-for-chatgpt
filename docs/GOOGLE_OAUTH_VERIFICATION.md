@@ -1,5 +1,7 @@
 # Google OAuth production and verification submission pack
 
+[简体中文](GOOGLE_OAUTH_VERIFICATION.zh-CN.md)
+
 Prepared: August 15, 2026
 
 ## Current status: OWNER ACTION REQUIRED
@@ -29,6 +31,8 @@ Do not publish v1.1.0 as “available to every Google user” until the evidence
 - Planned release: `v1.1.0` — not published while this gate remains open.
 - Fixed Chrome Extension ID: `igacbcmbkglkglkindhcpmagafnboolj`.
 - Production Chrome Extension OAuth Client ID: `43154637059-a8t1kbv88cv9kj51edigsluh0gkbvn2m.apps.googleusercontent.com`.
+- Production account-chooser Web OAuth Client ID: `43154637059-t2no9fsmb7rmn2pnd1d6p6dlvroga1q0.apps.googleusercontent.com`.
+- Account-chooser redirect URI: `https://igacbcmbkglkglkindhcpmagafnboolj.chromiumapp.org/`.
 - Google Photos scope: `https://www.googleapis.com/auth/photospicker.mediaitems.readonly` only.
 - No legacy `photoslibrary.readonly` scope.
 - No Client Secret, password collection, token backend, analytics, or telemetry.
@@ -114,7 +118,7 @@ Justification:
 
 ### Data handling statement
 
-> Google user data is used only to complete the photo-selection action initiated by the user. OAuth tokens are managed by Chrome Identity and are not stored in extension storage or sent to a project-controlled server. Selected photo bytes are processed in browser memory, sent only to the user's active ChatGPT page, and are not retained by the extension after the operation. The project has no backend, analytics, telemetry, advertising, or sale of user data.
+> Google user data is used only to complete the photo-selection action initiated by the user. OAuth is handled through Chrome Identity and Google's official endpoints. In account-chooser mode, the short-lived access token is held only in `chrome.storage.session` for the current browser session; it is never sent to a project-controlled server or exposed to the ChatGPT content script. Selected photo bytes are processed in browser memory, sent only to the user's active ChatGPT page, and are not retained by the extension after the operation. The project has no backend, analytics, telemetry, advertising, or sale of user data.
 
 ## Reviewer instructions
 
@@ -147,7 +151,7 @@ Record in English, in one continuous capture when possible. Upload as an unliste
 8. Select two non-sensitive demonstration photos and press **Done**.
 9. Show the Picker closing and both photos appearing in the ChatGPT attachment area.
 10. Reopen the Picker to demonstrate that an authorized user is not asked to authorize again.
-11. Open the popup/options page and show **Connected**, **Reconnect**, **Disconnect**, and the Privacy Policy links.
+11. Open the popup/options page and show **Connected**, **Choose another Google account**, **Disconnect**, and the Privacy Policy links.
 12. Disconnect, click the icon again, and show that the extension returns to the official authorization flow.
 13. End on a data-flow slide: Google OAuth/Picker → browser memory → active ChatGPT page; no custom backend, analytics, telemetry, token storage, or password collection.
 
@@ -164,7 +168,7 @@ Do not reveal real tokens, private filenames, personal photos, email inboxes, Cl
 - Official Google Photos Picker with safe demonstration media.
 - ChatGPT composer with selected demo photos attached.
 - Popup connected state: **Connected / Google Photos Picker verified and ready**.
-- Reconnect and Disconnect controls.
+- Choose another Google account and Disconnect controls.
 - Simplified Chinese authorization UI.
 - Google Cloud Audience page showing External and In production.
 - Google Cloud Branding page showing verified/published status and public policy URLs.
