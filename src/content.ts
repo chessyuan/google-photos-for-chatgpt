@@ -4,6 +4,7 @@ import {
 } from './content/attachment'
 import { createQuickUi } from './content/quick-ui'
 import { errorMessage } from './shared/errors'
+import { message } from './shared/i18n'
 import { downloadJobFiles } from './shared/download-client'
 import {
   markPerformance,
@@ -59,13 +60,10 @@ function displayJob(job: PublicJob, showTerminalToast = true): void {
     const warningSuffix =
       job.warnings.length > 0
         ? ' ' +
-          job.warnings.length +
-          ' compatibility warning(s) are available in the extension popup.'
+          message('compatibilityWarnings', String(job.warnings.length))
         : ''
     ui.showToast(
-      String(job.selectedCount) +
-        ' photo(s) added to ChatGPT.' +
-        warningSuffix,
+      message('photosAdded', String(job.selectedCount)) + warningSuffix,
       'success',
     )
   } else {
@@ -82,7 +80,7 @@ async function attachReadyJob(job: PublicJob): Promise<void> {
   let workingToastShown = false
   const workingToastTimer = window.setTimeout(() => {
     workingToastShown = true
-    ui.showToast('Adding photos…', 'info', 30_000)
+    ui.showToast(message('addingPhotos'), 'info', 30_000)
   }, 300)
 
   try {

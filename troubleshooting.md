@@ -1,6 +1,28 @@
 # Troubleshooting
 
-## OAuth is not configured
+## Connect Google Photos is shown
+
+This is the normal first-use or disconnected state. Open ChatGPT and click the Google Photos icon, or click **Connect Google Photos** in the extension popup. Complete Google's official authorization screen; the Picker should open automatically without a second click.
+
+The extension never asks you to copy a token, enter a Client ID, create a Google Cloud project, or type your Google password into the extension.
+
+## Authorization expired or failed
+
+Use **Choose another Google account** in the popup or options page. A correctly configured release opens Google's official account chooser. If the button says **Reconnect current Chrome account**, that developer build has no account-chooser Web OAuth client and cannot honestly switch away from the current Chrome profile account.
+
+## Picker opens but the library is empty
+
+Google Photos Picker sessions are tied to the Google account that authorized the session. An empty Picker with Google Photos onboarding normally means the selected account has no Google Photos library; it is not proof that `sessions.create` failed.
+
+Open the extension popup and check the account line. Use **Choose another Google account**, select the account that actually contains the photos, and wait for the Picker-ready state before reopening it. The extension discards the old standby session before account selection so a session from the previous account cannot be reused.
+
+If Google says the app is unavailable to your account, the maintainer's OAuth app may still be in Testing or awaiting verification. Ordinary users cannot fix that locally and should not create or paste credentials. See the repository release status or contact the maintainer.
+
+## Disconnect Google Photos
+
+**Disconnect Google Photos** clears local authorization state, removes any standby Picker session, revokes the chooser-mode token through Google's official endpoint when available, and suppresses background prewarming until you connect again. No token is sent to a project-controlled server.
+
+## Developer build: OAuth is not configured
 
 Symptoms: the popup action is disabled or reports that the OAuth Client ID is missing.
 
@@ -11,7 +33,7 @@ npm run build
 
 Reload the extension and the ChatGPT tab afterward.
 
-## Bad client ID or OAuth2 request failed
+## Developer build: bad Client ID
 
 Verify all of the following:
 
@@ -27,7 +49,7 @@ Verify all of the following:
 - If the OAuth app is External and in testing, add the current Google account under **Test users**.
 - Add only `https://www.googleapis.com/auth/photospicker.mediaitems.readonly` for Photos access.
 - Enable **Google Photos Picker API**, not Google Picker API or the legacy Photos Library API.
-- After changing consent settings, use **Clear cached Google authorization** in the extension popup and try again.
+- After changing consent settings, use **Reconnect** in the extension popup and try again.
 
 Only continue an unverified-app warning for a Google Cloud project you control and recognize.
 
@@ -35,19 +57,24 @@ Only continue an unverified-app warning for a Google Cloud project you control a
 
 The extension removes a rejected token from Chrome's identity cache and retries once. If the request still fails:
 
-1. Use **Clear cached Google authorization** in the extension popup.
+1. Use **Reconnect** in the extension popup.
 2. Confirm that the browser profile is signed in to the intended Google account.
 3. Start the Picker again.
 4. If several Google accounts are signed in, use the same account in the Picker that authorized the session.
 
 ## Picker window does not open
 
+- The green **Connected** state now requires both the exact Picker scope and a successful `POST /v1/sessions`; a cached token alone is never shown as connected.
+- If verification fails, copy the displayed `PICKER_API_...` diagnostic code. `403 PERMISSION_DENIED` normally means the Picker API, OAuth client, test-user, publishing, or verification configuration is not usable for that account.
+- v1.1.0 reuses the token returned by the first interactive authorization instead of immediately requesting it again.
+- An in-progress standby session is shared with the click flow, preventing two competing `sessions.create` requests.
+- If Chrome restarts the MV3 service worker during startup, the next click discards the orphaned job and retries instead of waiting forever.
+- Picker API requests fail with an actionable timeout after 12 seconds rather than leaving the UI on **Opening Google Photos…** indefinitely.
+- The extension pre-creates only the official session. It does not open, minimize, hide, or automatically recreate a Google Photos page before a user click.
 - Confirm that browser or enterprise policy allows extensions to create windows.
 - Start from either the extension popup or the icon beside the ChatGPT composer.
 - Inspect the extension service worker from `chrome://extensions` for a sanitized error.
 - Reload the extension and ChatGPT, then retry.
-
-The preload uses an unfocused, minimized popup rather than adding a permanent tab to the main browser window. Closing an unused preloaded popup suppresses immediate recreation, preventing a close/reopen loop.
 
 ## Picker closed or user cancelled
 
@@ -127,7 +154,7 @@ The production extension does not print OAuth access tokens or photo bytes. Deta
 
 ## Clean reset
 
-1. Use **Clear cached Google authorization** in the popup.
+1. Use **Disconnect Google Photos**, then connect again.
 2. Close any remaining Picker window.
 3. Reload the extension.
 4. Reload ChatGPT.

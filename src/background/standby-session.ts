@@ -72,18 +72,15 @@ export function standbyIsUsable(
 
 export function clearStandbyPreloadState(
   session: StandbyPickerSession,
-  dismissed = false,
 ): StandbyPickerSession {
   const cleared = {
     ...session,
     ready: false,
-    ...(dismissed ? { preloadDismissed: true } : {}),
   }
   delete cleared.pickerTabId
   delete cleared.pickerWindowId
   delete cleared.tabStatus
   delete cleared.preloadPresentation
-  if (!dismissed) delete cleared.preloadDismissed
   return cleared
 }
 
@@ -127,4 +124,17 @@ export async function consumeStandbySession(
     await writeStandbySession(consumed)
     return { standby: consumed, storageReadMilliseconds }
   })
+}
+
+export async function consumeStandbyAfterCreation(
+  maxItemCount: number,
+  inFlightCreation: Promise<unknown> | undefined,
+  now = Date.now(),
+): Promise<StandbyConsumeResult> {
+  let result = await consumeStandbySession(maxItemCount, now)
+  if (result.missReason === 'no session' && inFlightCreation) {
+    await inFlightCreation
+    result = await consumeStandbySession(maxItemCount, now)
+  }
+  return result
 }

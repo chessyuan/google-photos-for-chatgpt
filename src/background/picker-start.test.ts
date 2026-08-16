@@ -7,9 +7,14 @@ describe('Picker start disposition', () => {
     expect(pickerStartDisposition('picking')).toBe('focus-existing')
   })
 
-  it('deduplicates only OAuth and session creation', () => {
-    expect(pickerStartDisposition('authorizing')).toBe('wait')
-    expect(pickerStartDisposition('creating_session')).toBe('wait')
+  it('deduplicates OAuth and session creation only while work is active', () => {
+    expect(pickerStartDisposition('authorizing', true)).toBe('wait')
+    expect(pickerStartDisposition('creating_session', true)).toBe('wait')
+  })
+
+  it('restarts orphaned MV3 jobs instead of waiting forever', () => {
+    expect(pickerStartDisposition('authorizing', false)).toBe('start-new')
+    expect(pickerStartDisposition('creating_session', false)).toBe('start-new')
   })
 
   it('allows another selection while earlier photos finish processing', () => {

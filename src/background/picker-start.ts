@@ -4,8 +4,14 @@ export type PickerStartDisposition = 'focus-existing' | 'wait' | 'start-new'
 
 export function pickerStartDisposition(
   status: JobStatus,
+  startInFlight = false,
 ): PickerStartDisposition {
   if (status === 'picking') return 'focus-existing'
-  if (status === 'authorizing' || status === 'creating_session') return 'wait'
+  if (
+    startInFlight &&
+    (status === 'authorizing' || status === 'creating_session')
+  ) {
+    return 'wait'
+  }
   return 'start-new'
 }

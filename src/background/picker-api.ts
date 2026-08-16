@@ -1,5 +1,6 @@
 import { PICKER_API_ROOT } from '../shared/constants'
 import { ApiError, UserFacingError } from '../shared/errors'
+import { message } from '../shared/i18n'
 import type {
   MediaItemsResponse,
   PickedMediaItem,
@@ -20,6 +21,8 @@ interface GoogleErrorBody {
   }
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MILLISECONDS = 12_000
+
 async function readError(response: Response): Promise<ApiError> {
   let body: GoogleErrorBody | undefined
   try {
@@ -39,14 +42,52 @@ async function readError(response: Response): Promise<ApiError> {
 }
 
 export class PickerApi {
-  constructor(private readonly request: AuthorizedFetch) {}
+  constructor(
+    private readonly request: AuthorizedFetch,
+    private readonly requestTimeoutMilliseconds =
+      DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
+  ) {}
+
+  private async requestWithTimeout(
+    url: string,
+    init: RequestInit = {},
+    interactive = false,
+  ): Promise<Response> {
+    const controller = new AbortController()
+    const callerSignal = init.signal
+    const abortFromCaller = () => controller.abort(callerSignal?.reason)
+    if (callerSignal?.aborted) abortFromCaller()
+    else callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
+
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<Response>((_, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort()
+        reject(new UserFacingError(message('googlePhotosRequestTimedOut')))
+      }, this.requestTimeoutMilliseconds)
+    })
+
+    try {
+      return await Promise.race([
+        this.request(
+          url,
+          { ...init, signal: controller.signal },
+          interactive,
+        ),
+        timedOut,
+      ])
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+      callerSignal?.removeEventListener('abort', abortFromCaller)
+    }
+  }
 
   private async json<T>(
     url: string,
     init?: RequestInit,
     interactive = false,
   ): Promise<T> {
-    const response = await this.request(url, init, interactive)
+    const response = await this.requestWithTimeout(url, init, interactive)
     if (!response.ok) throw await readError(response)
     return (await response.json()) as T
   }
@@ -77,7 +118,7 @@ export class PickerApi {
 
   async deleteSession(sessionId: string): Promise<void> {
     if (!sessionId) return
-    const response = await this.request(
+    const response = await this.requestWithTimeout(
       PICKER_API_ROOT + '/sessions/' + encodeURIComponent(sessionId),
       { method: 'DELETE' },
     )
