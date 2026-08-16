@@ -1,0 +1,53 @@
+name: Bug report / 错误报告
+description: Report a reproducible problem without exposing private data. / 报告可复现问题，请勿公开隐私数据。
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste OAuth tokens, credentials, private photo URLs, personal filenames, or account screenshots.
+        请勿粘贴 OAuth token、凭据、私人照片 URL、个人文件名或账号截图。
+  - type: input
+    id: version
+    attributes:
+      label: Extension version / 扩展版本
+      placeholder: 1.1.0
+    validations:
+      required: true
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome version / Chrome 版本
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Failure stage / 出错阶段
+      options:
+        - OAuth or account selection / OAuth 或账号选择
+        - Picker opening / 打开 Picker
+        - Photo selection or Done / 选图或完成
+        - Downloading selected media / 获取所选媒体
+        - ChatGPT attachment / ChatGPT 附件导入
+        - Other / 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps / 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result / 预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics / 脱敏诊断信息
+      description: Remove tokens, emails, filenames, private URLs, and photo content. / 删除 token、邮箱、文件名、私人 URL 和照片内容。

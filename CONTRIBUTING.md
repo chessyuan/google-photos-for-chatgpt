@@ -13,7 +13,7 @@ Thank you for helping improve Google Photos for ChatGPT.
 
 1. Fork the repository and create a focused branch.
 2. Install dependencies with `npm install`.
-3. Configure your own Chrome Extension OAuth client in `.env.local` if the change needs the real Picker.
+3. Configure your own Chrome Extension OAuth client and, for the real account chooser, your own Web OAuth client in `.env.local` if the change needs the live Picker. Follow [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); never reuse a maintainer-owned project for a fork.
 4. Keep OAuth, Picker, and ChatGPT attachment changes narrowly scoped.
 5. Add or update tests for behavior changes.
 6. Run:
@@ -35,5 +35,6 @@ Thank you for helping improve Google Photos for ChatGPT.
 - Avoid selectors based on ChatGPT's generated CSS class names.
 - Preserve cancellation, session deletion, and service-worker recovery behavior.
 - Do not add analytics, a remote server, or new permissions without a clear proposal and privacy rationale.
+- Keep English and Simplified Chinese user-facing documentation and locale strings in sync.
 
 By contributing, you agree that your contribution is licensed under the MIT License.

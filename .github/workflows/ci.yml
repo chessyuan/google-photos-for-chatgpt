@@ -39,6 +39,7 @@ jobs:
         env:
           # Installed-app OAuth client IDs are public identifiers, not secrets.
           GPFC_GOOGLE_CLIENT_ID: 43154637059-a8t1kbv88cv9kj51edigsluh0gkbvn2m.apps.googleusercontent.com
+          GPFC_GOOGLE_WEB_CLIENT_ID: 43154637059-t2no9fsmb7rmn2pnd1d6p6dlvroga1q0.apps.googleusercontent.com
 
       - name: Verify dist
         run: npm run verify:dist

@@ -26,12 +26,20 @@ import { CompletionCoordinator } from './background/completion-coordinator'
 import { streamJobToPort } from './background/download-stream'
 import {
   authorizedFetch,
-  clearAllAccessTokens,
+  connectGooglePhotos,
   createAuthorizedFetchSession,
+  disconnectGooglePhotos,
   getAccessToken,
+  getAccessTokenForUserAction,
+  getGoogleAuthState,
   getManifestClientId,
   isOAuthConfigured,
 } from './background/google-auth'
+import {
+  markGooglePhotosError,
+  markGooglePhotosReady,
+} from './background/google-photos-readiness'
+import { authorizeAndCreatePickerSession } from './background/picker-authorization'
 import {
   getAllJobs,
   getJob,
@@ -47,12 +55,11 @@ import {
 } from './background/picker-api'
 import { pickerCloseIsSettled } from './background/picker-lifecycle'
 import { pickerStartDisposition } from './background/picker-start'
-import { pickerPreloadWindowOptions } from './background/preload-window'
 import { SingleFlight } from './background/single-flight'
 import { transitionSessionState } from './background/session-state'
 import {
   clearStandbyPreloadState,
-  consumeStandbySession,
+  consumeStandbyAfterCreation,
   readStandbySession,
   removeStandbySession,
   standbyFromPickingSession,
@@ -67,24 +74,56 @@ import {
   markPerformance,
   performancePoints,
 } from './shared/performance'
+import { message } from './shared/i18n'
 
 const pickerApi = new PickerApi(authorizedFetch)
 const activePolls = new Set<string>()
 const finalizationFlight = new SingleFlight()
 const activePickerApis = new Map<string, Promise<PickerApi>>()
+const activePickerStartsByTab = new Map<number, PickerJob>()
 const completionCoordinator = new CompletionCoordinator()
 const completionProbesUsed = new Set<string>()
 const activeStreams = new Map<string, AbortController>()
 let standbyCreation: Promise<void> | undefined
 let standbyReplaceRequested = false
 let lastPrewarmMissReason: 'auth unavailable' | undefined
-const monitoredPreloadTabs = new Set<number>()
-const PRELOAD_TAB_TIMEOUT_MILLISECONDS = 45_000
 const terminalStatuses = new Set<JobStatus>([
   'complete',
   'cancelled',
   'error',
 ])
+
+function pickerDiagnosticCode(error: unknown): string {
+  if (error instanceof ApiError) {
+    const apiStatus = error.apiStatus?.replace(/[^A-Z0-9_]/gi, '_')
+    return (
+      'PICKER_API_HTTP_' +
+      error.status +
+      (apiStatus ? '_' + apiStatus : '')
+    )
+  }
+  if (
+    error instanceof UserFacingError &&
+    error.message === message('googlePhotosRequestTimedOut')
+  ) {
+    return 'PICKER_API_TIMEOUT'
+  }
+  if (error instanceof TypeError) return 'PICKER_API_NETWORK_ERROR'
+  return 'PICKER_API_REQUEST_FAILED'
+}
+
+async function recordPickerApiError(error: unknown): Promise<void> {
+  try {
+    await markGooglePhotosError(
+      friendlyError(error),
+      pickerDiagnosticCode(error),
+    )
+  } catch (storageError) {
+    debugEvent('could not persist Picker readiness error', {
+      error: errorMessage(storageError),
+    })
+  }
+}
 
 function transitionJobSession(
   job: PickerJob,
@@ -102,6 +141,22 @@ function pickerApiForJob(jobId: string): Promise<PickerApi> {
     activePickerApis.set(jobId, api)
   }
   return api
+}
+
+async function cancelOrphanedPickerStart(job: PickerJob): Promise<boolean> {
+  if (
+    (job.status !== 'authorizing' && job.status !== 'creating_session') ||
+    activePickerStartsByTab.get(job.targetTabId)?.id === job.id
+  ) {
+    return false
+  }
+  transitionJobSession(job, 'CANCELLED')
+  job.status = 'cancelled'
+  job.message = message('pickerOpeningInterrupted')
+  await putJob(job)
+  await closePickerWindow(job)
+  await cleanupSession(job)
+  return true
 }
 
 async function standbyBelongsToActiveJob(
@@ -162,187 +217,40 @@ async function discardStandbySession(
   }
 }
 
-async function retireLegacyPreloadedPicker(): Promise<void> {
+async function retirePreloadedPicker(): Promise<void> {
+  let pickerWindowId: number | undefined
   let pickerTabId: number | undefined
   await withStandbySessionLock(async () => {
     const current = await readStandbySession()
     if (
       !current ||
       current.used ||
-      current.pickerTabId === undefined ||
-      current.preloadPresentation === 'minimized-popup'
+      (current.pickerTabId === undefined && current.pickerWindowId === undefined)
     ) {
       return
     }
+    pickerWindowId = current.pickerWindowId
     pickerTabId = current.pickerTabId
-    await writeStandbySession(clearStandbyPreloadState(current, true))
+    await writeStandbySession(clearStandbyPreloadState(current))
   })
-  if (pickerTabId !== undefined) {
+
+  if (pickerWindowId !== undefined) {
+    try {
+      await chrome.windows.remove(pickerWindowId)
+    } catch {
+      // A preloaded popup from an older build may already be closed.
+    }
+  } else if (pickerTabId !== undefined) {
     try {
       await chrome.tabs.remove(pickerTabId)
     } catch {
-      // A legacy preloaded tab may already have been closed by the user.
+      // A preloaded tab from an older build may already be closed.
     }
-  }
-}
-
-async function writeStandbyPreloadState(
-  sessionId: string,
-  patch: Partial<StandbyPickerSession>,
-): Promise<StandbyPickerSession | undefined> {
-  return withStandbySessionLock(async () => {
-    const current = await readStandbySession()
-    if (!current || current.sessionId !== sessionId || current.used) {
-      return undefined
-    }
-    const updated = { ...current, ...patch }
-    await writeStandbySession(updated)
-    return updated
-  })
-}
-
-async function waitForPickerTabComplete(tabId: number): Promise<void> {
-  const existing = await chrome.tabs.get(tabId)
-  if (existing.status === 'complete') return
-
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup()
-      reject(new Error('The preloaded Picker popup did not finish loading in time.'))
-    }, PRELOAD_TAB_TIMEOUT_MILLISECONDS)
-    const onUpdated = (
-      updatedTabId: number,
-      changeInfo: { status?: string },
-    ) => {
-      if (updatedTabId !== tabId) return
-      if (changeInfo.status === 'loading') {
-        debugEpochTimestamp('standby Picker popup status=loading')
-      }
-      if (changeInfo.status === 'complete') {
-        cleanup()
-        resolve()
-      }
-    }
-    const onRemoved = (removedTabId: number) => {
-      if (removedTabId !== tabId) return
-      cleanup()
-      reject(new Error('The preloaded Picker popup was closed while loading.'))
-    }
-    const cleanup = () => {
-      clearTimeout(timeout)
-      chrome.tabs.onUpdated.removeListener(onUpdated)
-      chrome.tabs.onRemoved.removeListener(onRemoved)
-    }
-    chrome.tabs.onUpdated.addListener(onUpdated)
-    chrome.tabs.onRemoved.addListener(onRemoved)
-  })
-}
-
-async function abandonFailedPreload(sessionId: string): Promise<void> {
-  await withStandbySessionLock(async () => {
-    const current = await readStandbySession()
-    if (!current || current.sessionId !== sessionId || current.used) return
-    await writeStandbySession(clearStandbyPreloadState(current, true))
-  })
-}
-
-function monitorPreloadedPicker(
-  sessionId: string,
-  tabId: number,
-  windowId: number,
-): void {
-  if (monitoredPreloadTabs.has(tabId)) return
-  monitoredPreloadTabs.add(tabId)
-  void waitForPickerTabComplete(tabId)
-    .then(async () => {
-      debugEpochTimestamp('standby Picker popup status=complete')
-      await writeStandbyPreloadState(sessionId, {
-        pickerTabId: tabId,
-        pickerWindowId: windowId,
-        preloadPresentation: 'minimized-popup',
-        tabStatus: 'complete',
-        ready: true,
-      })
-    })
-    .catch(async () => {
-      await abandonFailedPreload(sessionId)
-    })
-    .finally(() => monitoredPreloadTabs.delete(tabId))
-}
-
-async function preloadStandbyPicker(
-  standby: StandbyPickerSession,
-): Promise<void> {
-  if (standby.preloadDismissed) return
-
-  if (
-    standby.preloadPresentation === 'minimized-popup' &&
-    standby.pickerWindowId !== undefined &&
-    standby.pickerTabId !== undefined
-  ) {
-    try {
-      await chrome.windows.get(standby.pickerWindowId)
-      const tab = await chrome.tabs.get(standby.pickerTabId)
-      if (tab.status === 'complete') {
-        await writeStandbyPreloadState(standby.sessionId, {
-          tabStatus: 'complete',
-          ready: true,
-        })
-      } else {
-        monitorPreloadedPicker(
-          standby.sessionId,
-          standby.pickerTabId,
-          standby.pickerWindowId,
-        )
-      }
-      return
-    } catch {
-      await abandonFailedPreload(standby.sessionId)
-      return
-    }
-  }
-
-  debugEpochTimestamp('standby Picker minimized popup create start')
-  const pickerWindow = await chrome.windows.create(
-    pickerPreloadWindowOptions(standby.pickerUri),
-  )
-  if (!pickerWindow?.id) {
-    throw new Error('Chrome did not return a window id for Picker preloading.')
-  }
-  if (pickerWindow.state !== 'minimized') {
-    try {
-      await chrome.windows.update(pickerWindow.id, { state: 'minimized' })
-    } catch (error) {
-      await chrome.windows.remove(pickerWindow.id)
-      throw error
-    }
-  }
-  const pickerTab =
-    pickerWindow.tabs?.[0] ??
-    (await chrome.tabs.query({ windowId: pickerWindow.id }))[0]
-  if (pickerTab?.id === undefined) {
-    await chrome.windows.remove(pickerWindow.id)
-    throw new Error('Chrome did not return a tab id for Picker preloading.')
-  }
-
-  const stored = await writeStandbyPreloadState(standby.sessionId, {
-    pickerTabId: pickerTab.id,
-    pickerWindowId: pickerWindow.id,
-    preloadPresentation: 'minimized-popup',
-    tabStatus: pickerTab.status === 'complete' ? 'complete' : 'loading',
-    ready: pickerTab.status === 'complete',
-  })
-  if (!stored) {
-    await chrome.windows.remove(pickerWindow.id)
-    return
-  }
-  if (pickerTab.status !== 'complete') {
-    monitorPreloadedPicker(standby.sessionId, pickerTab.id, pickerWindow.id)
   }
 }
 
 async function createStandbySession(replaceUsed: boolean): Promise<void> {
-  await retireLegacyPreloadedPicker()
+  await retirePreloadedPicker()
   let current = await withStandbySessionLock(readStandbySession)
   if (
     current?.used &&
@@ -359,15 +267,11 @@ async function createStandbySession(replaceUsed: boolean): Promise<void> {
     current = undefined
   }
   if (current && standbyIsUsable(current, DEFAULT_MAX_ITEM_COUNT)) {
+    await markGooglePhotosReady(
+      message('pickerReadyDetail'),
+      current.expireTime,
+    )
     await scheduleStandbyExpiry(current)
-    try {
-      await preloadStandbyPicker(current)
-    } catch (error) {
-      debugEvent('minimized Picker preload failed; standby session retained', {
-        error: friendlyError(error),
-      })
-      await abandonFailedPreload(current.sessionId)
-    }
     return
   }
   if (
@@ -379,9 +283,10 @@ async function createStandbySession(replaceUsed: boolean): Promise<void> {
   }
   if (current) await discardStandbySession(current.sessionId)
 
+  let accessToken: string
   const authStartedAt = performance.now()
   try {
-    await getAccessToken(false)
+    accessToken = await getAccessToken(false)
   } catch {
     lastPrewarmMissReason = 'auth unavailable'
     return
@@ -393,7 +298,17 @@ async function createStandbySession(replaceUsed: boolean): Promise<void> {
   let session
   const createStartedAt = performance.now()
   try {
-    session = await pickerApi.createSession(DEFAULT_MAX_ITEM_COUNT, false)
+    const standbyApi = new PickerApi(
+      await createAuthorizedFetchSession(accessToken),
+    )
+    session = await standbyApi.createSession(DEFAULT_MAX_ITEM_COUNT, false)
+    await markGooglePhotosReady(
+      message('pickerReadyDetail'),
+      session.expireTime,
+    )
+  } catch (error) {
+    await recordPickerApiError(error)
+    throw error
   } finally {
     debugLatency('session create latency', createStartedAt)
   }
@@ -419,14 +334,6 @@ async function createStandbySession(replaceUsed: boolean): Promise<void> {
     }
   } else {
     await scheduleStandbyExpiry(standby)
-    try {
-      await preloadStandbyPicker(standby)
-    } catch (error) {
-      debugEvent('minimized Picker preload failed; standby session retained', {
-        error: friendlyError(error),
-      })
-      await abandonFailedPreload(standby.sessionId)
-    }
   }
 }
 
@@ -436,8 +343,11 @@ async function prewarmStandbySession(replaceUsed = false): Promise<void> {
     return standbyCreation
   }
   standbyCreation = createStandbySession(replaceUsed)
-    .catch(() => {
+    .catch((error) => {
       // Prewarming is opportunistic and must never affect the normal Picker flow.
+      debugEvent('standby session prewarm failed', {
+        error: friendlyError(error),
+      })
     })
     .finally(() => {
       standbyCreation = undefined
@@ -459,8 +369,11 @@ async function takeStandbySession(
   standby?: StandbyPickerSession
   missReason?: string
 }> {
-  await retireLegacyPreloadedPicker()
-  const result = await consumeStandbySession(maxItemCount)
+  await retirePreloadedPicker()
+  const result = await consumeStandbyAfterCreation(
+    maxItemCount,
+    standbyCreation,
+  )
   debugEvent('chrome.storage.session read latency', {
     milliseconds: Number(result.storageReadMilliseconds.toFixed(1)),
   })
@@ -482,25 +395,16 @@ async function takeStandbySession(
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) {
-      return 'Google authorization expired and could not be refreshed. Clear cached authorization and try again.'
+      return message('authorizationExpired')
     }
     if (error.status === 403) {
-      return (
-        error.message +
-        ' Enable Google Photos Picker API, add the Picker scope, and confirm this Google account is an allowed test user.'
-      )
+      return message('googlePhotosPermissionDenied')
     }
     if (error.apiStatus === 'FAILED_PRECONDITION') {
-      return (
-        error.message +
-        ' Confirm the account has an active Google Photos library and that the Picker selection was completed.'
-      )
+      return message('googlePhotosServiceUnavailable')
     }
     if (error.apiStatus === 'RESOURCE_EXHAUSTED') {
-      return (
-        error.message +
-        ' Too many Picker sessions exist. Wait briefly; completed sessions are cleaned up automatically.'
-      )
+      return message('googlePhotosServiceUnavailable')
     }
   }
   return errorMessage(error)
@@ -1001,53 +905,6 @@ async function focusExistingPicker(
   return false
 }
 
-async function activatePreloadedPicker(
-  job: PickerJob,
-  standby: StandbyPickerSession,
-  clickStartedAt?: number,
-): Promise<'preloaded-ready' | 'preloaded-loading' | undefined> {
-  if (
-    standby.preloadPresentation !== 'minimized-popup' ||
-    standby.pickerWindowId === undefined ||
-    standby.pickerTabId === undefined
-  ) {
-    return undefined
-  }
-
-  try {
-    const tab = await chrome.tabs.get(standby.pickerTabId)
-    await chrome.windows.get(standby.pickerWindowId)
-    transitionJobSession(job, 'OPENING')
-    markPerformance(job.performanceTrace, performancePoints.pickerActivateStart)
-    debugEpochTimestamp('standby Picker popup restore start')
-    await chrome.windows.update(standby.pickerWindowId, { state: 'normal' })
-    await chrome.tabs.update(standby.pickerTabId, { active: true })
-    await chrome.windows.update(standby.pickerWindowId, { focused: true })
-    void chrome.windows
-      .update(standby.pickerWindowId, { width: 1180, height: 820 })
-      .catch(() => {
-        // Restoring/focusing is authoritative; stale multi-monitor bounds must
-        // not make an otherwise ready Picker fail to open.
-      })
-    job.pickerWindowId = standby.pickerWindowId
-    job.pickerTabId = standby.pickerTabId
-    job.pickerPresentation = 'popup-window'
-    job.pickerWindowClosedAt = undefined
-    markPerformance(job.performanceTrace, performancePoints.pickerVisible)
-    transitionJobSession(job, 'VISIBLE')
-    observePickerTabForClick(tab, clickStartedAt)
-    const mode =
-      tab.status === 'complete' || standby.ready
-        ? 'preloaded-ready'
-        : 'preloaded-loading'
-    debugEvent('minimized Picker popup activated', { mode })
-    debugEpochLatency('click → preloaded Picker visible', clickStartedAt)
-    return mode
-  } catch {
-    return undefined
-  }
-}
-
 async function openPickerWindow(
   job: PickerJob,
   pickerUri: string,
@@ -1094,32 +951,51 @@ async function beginPicker(
   job: PickerJob,
   clickStartedAt?: number,
   standby?: StandbyPickerSession,
-): Promise<
-  'preloaded-ready' | 'preloaded-loading' | 'standby' | 'fallback'
-> {
+): Promise<'standby' | 'fallback'> {
   try {
     let pickerUri = standby?.pickerUri
-    let pickerMode:
-      | 'preloaded-ready'
-      | 'preloaded-loading'
-      | 'standby'
-      | 'fallback' = standby ? 'standby' : 'fallback'
+    const pickerMode: 'standby' | 'fallback' = standby ? 'standby' : 'fallback'
     if (!pickerUri) {
-      const authStartedAt = performance.now()
-      try {
-        await getAccessToken(true)
-      } finally {
-        debugLatency('auth token latency', authStartedAt)
-      }
-      await updateJob(job, 'creating_session', 'Creating a secure Picker session…')
-
-      const createStartedAt = performance.now()
-      let session
-      try {
-        session = await pickerApi.createSession(job.maxItemCount, false)
-      } finally {
-        debugLatency('session create latency', createStartedAt)
-      }
+      const session = await authorizeAndCreatePickerSession(
+        async () => {
+          const authStartedAt = performance.now()
+          try {
+            return await getAccessTokenForUserAction()
+          } finally {
+            debugLatency('auth token latency', authStartedAt)
+          }
+        },
+        async (accessToken) => {
+          await updateJob(
+            job,
+            'creating_session',
+            message('openingGooglePhotos'),
+          )
+          const createStartedAt = performance.now()
+          try {
+            const jobApi = new PickerApi(
+              await createAuthorizedFetchSession(accessToken),
+            )
+            activePickerApis.set(job.id, Promise.resolve(jobApi))
+            try {
+              const session = await jobApi.createSession(
+                job.maxItemCount,
+                false,
+              )
+              await markGooglePhotosReady(
+                message('pickerReadyDetail'),
+                session.expireTime,
+              )
+              return session
+            } catch (error) {
+              await recordPickerApiError(error)
+              throw error
+            }
+          } finally {
+            debugLatency('session create latency', createStartedAt)
+          }
+        },
+      )
       job.sessionId = session.id
       job.expireTime = session.expireTime
       job.pollingConfig = session.pollingConfig
@@ -1128,14 +1004,7 @@ async function beginPicker(
       await putJob(job)
     }
 
-    if (standby) {
-      pickerMode =
-        (await activatePreloadedPicker(job, standby, clickStartedAt)) ??
-        'standby'
-    }
-    if (pickerMode === 'standby' || pickerMode === 'fallback') {
-      await openPickerWindow(job, pickerUri, clickStartedAt)
-    }
+    await openPickerWindow(job, pickerUri, clickStartedAt)
     job.status = 'picking'
     transitionJobSession(job, 'WAITING_SELECTION')
     job.message =
@@ -1145,6 +1014,7 @@ async function beginPicker(
     void pollSession(job)
     return pickerMode
   } catch (error) {
+    activePickerApis.delete(job.id)
     await failJob(job, error)
     throw error
   }
@@ -1191,7 +1061,10 @@ async function startPicker(
   const { tabId, kind } = await resolveTarget(request, sender)
   const existing = await getLatestJobForTab(tabId)
   if (existing && !terminalStatuses.has(existing.status)) {
-    const disposition = pickerStartDisposition(existing.status)
+    const disposition = pickerStartDisposition(
+      existing.status,
+      activePickerStartsByTab.get(tabId)?.id === existing.id,
+    )
     if (disposition === 'focus-existing') {
       const focused = await focusExistingPicker(
         existing,
@@ -1217,6 +1090,8 @@ async function startPicker(
         pickerOpened: false,
         pickerReused: true,
       }
+    } else {
+      await cancelOrphanedPickerStart(existing)
     }
   }
 
@@ -1234,6 +1109,17 @@ async function startPicker(
     )
   }
 
+  const concurrentStart = activePickerStartsByTab.get(tabId)
+  if (concurrentStart) {
+    return {
+      ok: true,
+      jobId: concurrentStart.id,
+      job: publicJob(concurrentStart),
+      pickerOpened: false,
+      pickerReused: true,
+    }
+  }
+
   const now = Date.now()
   const job: PickerJob = {
     id: crypto.randomUUID(),
@@ -1241,43 +1127,79 @@ async function startPicker(
     targetKind: kind,
     status: 'authorizing',
     sessionState: 'CREATING',
-    message: 'Requesting Google Photos Picker authorization…',
+    message: message('openingGooglePhotos'),
     createdAt: now,
     updatedAt: now,
     maxItemCount: requestedMaximum,
     warnings: [],
   }
   job.performanceTrace = createPerformanceTrace(job.id, request.clickStartedAt)
-  const taken =
-    kind === 'chatgpt'
-      ? await takeStandbySession(requestedMaximum)
-      : { standby: undefined }
-  const standby = taken.standby
-  if (standby) {
-    job.status = 'picking'
-    job.message =
-      'Google Photos Picker is open. Choose one or more photos and click Done.'
-    job.sessionId = standby.sessionId
-    job.expireTime = standby.expireTime
-    job.pollingConfig = standby.pollingConfig
-    transitionJobSession(job, 'READY')
-    await putJob(job)
-  } else {
+  activePickerStartsByTab.set(tabId, job)
+  try {
     await putJob(job)
     await notifyJob(job)
+    const taken =
+      kind === 'chatgpt'
+        ? await takeStandbySession(requestedMaximum)
+        : { standby: undefined }
+    const standby = taken.standby
+    if (standby) {
+      job.status = 'picking'
+      job.message =
+        'Google Photos Picker is open. Choose one or more photos and click Done.'
+      job.sessionId = standby.sessionId
+      job.expireTime = standby.expireTime
+      job.pollingConfig = standby.pollingConfig
+      transitionJobSession(job, 'READY')
+      await putJob(job)
+    }
+    const pickerMode = await beginPicker(
+      job,
+      request.clickStartedAt,
+      standby,
+    )
+    if (kind === 'chatgpt') scheduleStandbyPrewarm(true)
+    return {
+      ok: true,
+      jobId: job.id,
+      job: publicJob(job),
+      pickerOpened: true,
+      pickerMode,
+    }
+  } finally {
+    if (activePickerStartsByTab.get(tabId)?.id === job.id) {
+      activePickerStartsByTab.delete(tabId)
+    }
   }
-  const pickerMode = await beginPicker(
-    job,
-    request.clickStartedAt,
-    standby,
-  )
-  if (kind === 'chatgpt') scheduleStandbyPrewarm(true)
-  return {
-    ok: true,
-    jobId: job.id,
-    job: publicJob(job),
-    pickerOpened: true,
-    pickerMode,
+}
+
+async function cancelActiveJobsForAuthorizationChange(): Promise<void> {
+  for (const job of await getAllJobs()) {
+    if (terminalStatuses.has(job.status)) continue
+    if (
+      job.sessionState === 'CONSUMED' ||
+      job.sessionState === 'CANCELLED' ||
+      job.sessionState === 'EXPIRED' ||
+      job.sessionState === 'FAILED'
+    ) {
+      continue
+    }
+    try {
+      transitionJobSession(job, 'CANCELLED')
+      activeStreams.get(job.id)?.abort()
+      await updateJob(
+        job,
+        'cancelled',
+        'Google account connection changed. The previous Picker was closed.',
+      )
+      await closePickerWindow(job)
+      await cleanupSession(job)
+    } catch (error) {
+      debugEvent('could not fully clean up Picker during account change', {
+        jobId: job.id,
+        error: friendlyError(error),
+      })
+    }
   }
 }
 
@@ -1289,6 +1211,9 @@ function isRuntimeRequest(value: unknown): value is RuntimeRequest {
     'WARM_PICKER',
     'GET_JOB',
     'GET_CONFIG',
+    'GET_AUTH_STATE',
+    'CONNECT_AUTH',
+    'DISCONNECT_AUTH',
     'ATTACH_RESULT',
     'CANCEL_JOB',
     'CLEAR_AUTH',
@@ -1309,6 +1234,7 @@ async function handleRequest(
       const tabId = request.targetTabId ?? sender.tab?.id
       if (tabId === undefined) return { ok: true }
       const job = await getLatestJobForTab(tabId)
+      if (job) await cancelOrphanedPickerStart(job)
       return { ok: true, job: job ? publicJob(job) : undefined }
     }
     case 'GET_CONFIG':
@@ -1318,11 +1244,27 @@ async function handleRequest(
         clientId: getManifestClientId(),
         oauthConfigured: isOAuthConfigured(),
       }
+    case 'GET_AUTH_STATE': {
+      const authState = await getGoogleAuthState()
+      if (authState.status === 'checking') scheduleStandbyPrewarm(false)
+      return { ok: true, authState }
+    }
+    case 'CONNECT_AUTH':
+      if (request.force) {
+        await cancelActiveJobsForAuthorizationChange()
+        if (standbyCreation) await standbyCreation
+        await discardStandbySession()
+      }
+      await connectGooglePhotos(Boolean(request.force))
+      await prewarmStandbySession(false)
+      return { ok: true, authState: await getGoogleAuthState() }
+    case 'DISCONNECT_AUTH':
     case 'CLEAR_AUTH':
+      await cancelActiveJobsForAuthorizationChange()
       if (standbyCreation) await standbyCreation
       await discardStandbySession()
-      await clearAllAccessTokens()
-      return { ok: true }
+      await disconnectGooglePhotos()
+      return { ok: true, authState: await getGoogleAuthState() }
     case 'CANCEL_JOB': {
       const job = await getJob(request.jobId)
       if (!job) throw new UserFacingError('Picker job was not found.')
@@ -1482,18 +1424,6 @@ chrome.windows.onRemoved.addListener((windowId) => {
         await putJob(job)
       }
     }
-    await withStandbySessionLock(async () => {
-      const standby = await readStandbySession()
-      if (
-        !standby ||
-        standby.used ||
-        standby.preloadPresentation !== 'minimized-popup' ||
-        standby.pickerWindowId !== windowId
-      ) {
-        return
-      }
-      await writeStandbySession(clearStandbyPreloadState(standby, true))
-    })
   })()
 })
 
@@ -1541,7 +1471,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 async function resumeJobs(): Promise<void> {
   await loadJobs()
-  await retireLegacyPreloadedPicker()
+  await retirePreloadedPicker()
   for (const job of await getAllJobs()) {
     if (job.status === 'picking' && job.sessionId) {
       void pollSession(job)
@@ -1559,12 +1489,7 @@ async function resumeJobs(): Promise<void> {
       (job.status === 'authorizing' || job.status === 'creating_session') &&
       !job.sessionId
     ) {
-      await failJob(
-        job,
-        new UserFacingError(
-          'The browser interrupted OAuth or session creation. Start the Picker again.',
-        ),
-      )
+      await cancelOrphanedPickerStart(job)
     }
   }
 }

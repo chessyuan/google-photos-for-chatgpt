@@ -1,0 +1,25 @@
+name: Feature request / 功能建议
+description: Propose a focused improvement. / 提出范围明确的改进。
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 问题
+      description: What user problem should be solved? / 希望解决什么用户问题？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 建议行为
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Permissions and privacy impact / 权限与隐私影响
+      description: State whether this needs new permissions, servers, analytics, or additional data. / 说明是否需要新权限、服务器、分析或额外数据。
+    validations:
+      required: true

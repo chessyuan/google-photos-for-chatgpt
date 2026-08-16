@@ -26,6 +26,24 @@ h1 { margin: 0; font-size: 21px; letter-spacing: -0.02em; }
 .status { margin: 12px 0; border-radius: 8px; background: #f3f4f6; padding: 10px 12px; color: #4b5563; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
 .status.error { background: #fef2f2; color: #991b1b; }
 .status.success { background: #ecfdf5; color: #065f46; }
+.connection-card { margin:12px 0 14px; padding:13px; border:1px solid #e5e7eb; border-radius:12px; background:#fafafa; }
+.section-title { margin:0 0 10px; font-size:13px; color:#4b5563; }
+.connection-row { display:flex; align-items:flex-start; gap:10px; }
+.connection-row strong { display:block; font-size:14px; line-height:1.35; }
+.connection-detail { margin:3px 0 0; color:#6b7280; font-size:12px; line-height:1.4; white-space:pre-line; }
+.connection-dot { width:9px; height:9px; margin-top:5px; border-radius:50%; flex:0 0 9px; background:#9ca3af; }
+.connection-dot.connected { background:#16a34a; box-shadow:0 0 0 3px rgb(22 163 74 / 0.12); }
+.connection-dot.checking { background:#2563eb; box-shadow:0 0 0 3px rgb(37 99 235 / 0.12); }
+.connection-dot.disconnected { background:#f59e0b; box-shadow:0 0 0 3px rgb(245 158 11 / 0.13); }
+.connection-dot.error { background:#dc2626; box-shadow:0 0 0 3px rgb(220 38 38 / 0.12); }
+.compact-actions { display:flex; gap:7px; margin-top:11px; }
+.compact-actions .compact { width:auto; padding:7px 9px; font-size:12px; }
+.danger { color:#b91c1c; }
+.account-actions { display:grid; grid-template-columns:1fr; gap:8px; margin-top:16px; }
+.policy-links { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:12px; font-size:11px; }
+.policy-links a { color:#4f46e5; text-decoration:none; }
+.policy-links a:hover { text-decoration:underline; }
+.policy-links.vertical { flex-direction:column; align-items:flex-start; font-size:14px; }
 .field-row { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; margin:14px 0; }
 .field-row input { width:76px; border:1px solid #d1d5db; border-radius:7px; padding:7px 8px; }
 .primary, .secondary, .quiet { width:100%; border-radius:9px; padding:10px 12px; border:0; font-weight:650; }
@@ -40,6 +58,7 @@ summary { cursor:pointer; color:#6b7280; font-size:13px; }
 .page-body { min-height:100vh; padding:40px 20px; background:linear-gradient(145deg,#eff6ff,#fff 48%,#f0fdf4); }
 .setup-card, .test-card { max-width:780px; margin:0 auto; background:white; border:1px solid #e5e7eb; border-radius:18px; box-shadow:0 18px 48px rgb(15 23 42 / 0.08); padding:32px; }
 .setup-card h1, .test-card h1 { font-size:28px; }
+.account-page { max-width:640px; }
 .setup-card h2 { font-size:17px; margin:0 0 8px; }
 .setup-card section { margin:28px 0; }
 .setup-card p, .test-card p { color:#4b5563; line-height:1.6; }

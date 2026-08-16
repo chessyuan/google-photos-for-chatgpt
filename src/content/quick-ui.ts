@@ -1,4 +1,5 @@
 import { findComposerRoot } from './attachment'
+import { message } from '../shared/i18n'
 
 export interface QuickUi {
   showToast(
@@ -66,7 +67,7 @@ export function createQuickUi(onSelect: () => void): QuickUi {
   const button = document.createElement('button')
   button.id = buttonId
   button.type = 'button'
-  button.setAttribute('aria-label', 'Select from Google Photos')
+  button.setAttribute('aria-label', message('selectFromGooglePhotos'))
   button.append(createPhotosIcon())
   Object.assign(button.style, {
     appearance: 'none',

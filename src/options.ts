@@ -1,4 +1,10 @@
-import type { RuntimeResponse } from './shared/types'
+import { errorMessage } from './shared/errors'
+import { localizeDocument, message } from './shared/i18n'
+import type {
+  GoogleAuthState,
+  RuntimeRequest,
+  RuntimeResponse,
+} from './shared/types'
 
 function required<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector)
@@ -6,43 +12,147 @@ function required<T extends Element>(selector: string): T {
   return element
 }
 
-const extensionId = required<HTMLElement>('#extension-id')
-const clientId = required<HTMLElement>('#client-id')
-const clientState = required<HTMLElement>('#client-state')
+localizeDocument()
 
-async function initialize(): Promise<void> {
-  const response = (await chrome.runtime.sendMessage({
-    type: 'GET_CONFIG',
-  })) as RuntimeResponse
-  if (!response.ok) {
-    clientState.textContent = response.error
-    clientState.className = 'status error'
-    return
+const status = required<HTMLElement>('#status')
+const connectionDot = required<HTMLSpanElement>('#connection-dot')
+const connectionStatus = required<HTMLElement>('#connection-status')
+const connectionDetail = required<HTMLParagraphElement>('#connection-detail')
+const connect = required<HTMLButtonElement>('#connect')
+const reconnect = required<HTMLButtonElement>('#reconnect')
+const disconnect = required<HTMLButtonElement>('#disconnect')
+let browserAuthorizationSupported = true
+
+function sendRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
+  return chrome.runtime.sendMessage(request) as Promise<RuntimeResponse>
+}
+
+function setStatus(
+  text: string,
+  kind: 'info' | 'success' | 'error' = 'info',
+): void {
+  status.textContent = text
+  status.className = 'status' + (kind === 'info' ? '' : ' ' + kind)
+}
+
+function authDetail(state: GoogleAuthState): string {
+  const account = state.accountEmail
+    ? message(
+        state.accountSelection === 'google-chooser'
+          ? 'connectedAccount'
+          : 'currentChromeAccount',
+        state.accountEmail,
+      )
+    : state.accountSelection === 'google-chooser' && state.authorized
+      ? message('selectedGoogleAccount')
+      : state.authorized
+        ? message('currentChromeAccountUnknown')
+        : ''
+  const detail = state.diagnosticCode
+    ? state.message + '\n' + message('diagnosticCode', state.diagnosticCode)
+    : state.message
+  return account ? account + '\n' + detail : detail
+}
+
+function renderAuthState(state: GoogleAuthState): void {
+  browserAuthorizationSupported = state.reason !== 'unsupported'
+  connectionDot.className = 'connection-dot ' + state.status
+  connect.hidden = state.authorized
+  reconnect.hidden = !state.authorized
+  disconnect.hidden = !state.authorized
+  reconnect.textContent = message(
+    state.accountSelection === 'google-chooser'
+      ? 'chooseAnotherAccount'
+      : 'reconnectChromeAccount',
+  )
+  if (state.connected) {
+    connectionStatus.textContent = message('connected')
+    connectionDetail.textContent = authDetail(state)
+    setStatus(message('ready'), 'success')
+  } else if (state.status === 'checking') {
+    connectionStatus.textContent = message('checkingConnection')
+    connectionDetail.textContent = authDetail(state)
+    setStatus(message('checkingGooglePhotosAccess'))
+  } else if (state.status === 'error') {
+    connectionStatus.textContent = message('error')
+    connectionDetail.textContent = authDetail(state)
+    setStatus(authDetail(state), 'error')
+  } else {
+    connectionStatus.textContent = message('connectGooglePhotos')
+    connectionDetail.textContent = state.message
+    setStatus(state.message)
   }
-
-  extensionId.textContent = response.extensionId ?? chrome.runtime.id
-  clientId.textContent = response.clientId ?? 'Not configured'
-  clientState.textContent = response.oauthConfigured
-    ? 'Configured. Reload the ChatGPT tab after rebuilding or reloading the extension.'
-    : 'Not configured. The Picker is intentionally disabled until a real Client ID is built into dist/manifest.json.'
-  clientState.className =
-    'status ' + (response.oauthConfigured ? 'success' : 'error')
+  setBusy(false)
 }
 
-for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
-  button.addEventListener('click', () => {
-    const targetId = button.dataset.copy
-    const text = targetId
-      ? document.getElementById(targetId)?.textContent
-      : undefined
-    if (text) {
-      void navigator.clipboard.writeText(text)
-      button.textContent = 'Copied'
-      window.setTimeout(() => {
-        button.textContent = 'Copy'
-      }, 1200)
+function setBusy(busy: boolean): void {
+  connect.disabled = busy || !browserAuthorizationSupported
+  reconnect.disabled = busy || !browserAuthorizationSupported
+  disconnect.disabled = busy
+}
+
+async function runConnection(force: boolean): Promise<void> {
+  setBusy(true)
+  setStatus(message('checkingConnection'))
+  try {
+    const response = await sendRequest({ type: 'CONNECT_AUTH', force })
+    if (!response.ok || !response.authState) {
+      throw new Error(response.ok ? message('authorizationFailed') : response.error)
     }
-  })
+    renderAuthState(response.authState)
+    if (response.authState.connected) {
+      setStatus(
+        force ? message('reconnectComplete') : message('connectComplete'),
+        'success',
+      )
+    } else {
+      setStatus(authDetail(response.authState), 'error')
+    }
+  } catch (error) {
+    setStatus(errorMessage(error), 'error')
+  } finally {
+    setBusy(false)
+  }
 }
 
-void initialize()
+connect.addEventListener('click', () => void runConnection(false))
+reconnect.addEventListener('click', () => void runConnection(true))
+disconnect.addEventListener('click', () => {
+  void (async () => {
+    setBusy(true)
+    try {
+      const response = await sendRequest({ type: 'DISCONNECT_AUTH' })
+      if (!response.ok || !response.authState) {
+        throw new Error(response.ok ? message('authorizationFailed') : response.error)
+      }
+      renderAuthState(response.authState)
+      setStatus(message('disconnectComplete'), 'success')
+    } catch (error) {
+      setStatus(errorMessage(error), 'error')
+    } finally {
+      setBusy(false)
+    }
+  })()
+})
+
+void (async () => {
+  try {
+    let response = await sendRequest({ type: 'GET_AUTH_STATE' })
+    if (!response.ok || !response.authState) {
+      throw new Error(response.ok ? message('authorizationFailed') : response.error)
+    }
+    renderAuthState(response.authState)
+    if (response.authState.status === 'checking') {
+      await sendRequest({ type: 'WARM_PICKER' })
+      response = await sendRequest({ type: 'GET_AUTH_STATE' })
+      if (!response.ok || !response.authState) {
+        throw new Error(
+          response.ok ? message('authorizationFailed') : response.error,
+        )
+      }
+      renderAuthState(response.authState)
+    }
+  } catch (error) {
+    setStatus(errorMessage(error), 'error')
+  }
+})()
