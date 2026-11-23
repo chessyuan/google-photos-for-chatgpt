@@ -13,7 +13,7 @@ No Windows file chooser is opened, no photo is intentionally saved to Downloads,
 
 [简体中文](README.zh-CN.md) · [OAuth, privacy, and architecture](docs/OAUTH_PRIVACY_AND_ARCHITECTURE.md) · [Privacy Policy](PRIVACY.md) · [Security](SECURITY.md)
 
-## v1.2.0 pre-release
+## v1.2.0 release
 
 Pick photos and ready videos, reopen the Picker immediately for a second selection, and find the Photos button above the visible plus control in a widened composer. See the [v1.2.0 release](https://github.com/chessyuan/google-photos-for-chatgpt/releases/tag/v1.2.0) for the installable ZIP, upgrade steps, and video limitations.
 

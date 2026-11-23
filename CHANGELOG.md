@@ -9,7 +9,7 @@ Google Photos for ChatGPT 的重要变化记录在此，版本号遵循语义化
 - Google OAuth production verification and unrestricted public-account availability remain pending.
 - Google OAuth 正式验证及面向所有普通账号的公开可用性仍待完成。
 
-## [1.2.0] - 2026-11-23 · Pre-release / 预发布
+## [1.2.0] - 2026-11-23 · Release / 正式版
 
 - Select ready videos alongside photos. The extension follows Google video CDN redirects, preserves the returned file type, and explains permission or network failures.
 - Reopen the Picker while a previous window finishes closing. Pending selections are handed to the composer one at a time.

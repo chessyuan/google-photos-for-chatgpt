@@ -13,7 +13,7 @@ ChatGPT → Google Photos 官方选择器 → 选择照片 → 完成
 
 [English](README.md) · [OAuth、隐私与技术原理](docs/OAUTH_PRIVACY_AND_ARCHITECTURE.zh-CN.md) · [隐私政策](PRIVACY.zh-CN.md) · [安全政策](SECURITY.zh-CN.md)
 
-## v1.2.0 预发布版
+## v1.2.0 正式版
 
 可以从 Google 相册选择照片和已处理完成的视频，交给 ChatGPT 的附件输入框。关闭选图窗口后可立即再选一批。输入框加宽时，相册图标会跟随实际的「＋」按钮。完整变更、下载和升级步骤见 [v1.2.0 发布说明](https://github.com/chessyuan/google-photos-for-chatgpt/releases/tag/v1.2.0)。
 
