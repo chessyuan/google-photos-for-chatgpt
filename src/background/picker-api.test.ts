@@ -90,4 +90,20 @@ describe('Picker API helpers', () => {
     expect(init?.signal?.aborted).toBe(true)
     vi.useRealTimers()
   })
+
+  it('also times out when headers arrive but the JSON body stalls', async () => {
+    vi.useFakeTimers()
+    try {
+      const request: AuthorizedFetch = vi.fn(async () => new Response(
+        new ReadableStream({ start() {} }),
+      ))
+      const operation = new PickerApi(request, 100).getSession('session')
+      const rejected = expect(operation).rejects.toThrow('did not respond in time')
+      await vi.advanceTimersByTimeAsync(100)
+      await rejected
+      expect(vi.mocked(request).mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

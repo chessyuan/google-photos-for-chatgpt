@@ -25,7 +25,7 @@ npm run verify:dist
 
 The official production build uses the maintainer's Chrome Extension OAuth Client ID. Installed-app OAuth client IDs are public identifiers and are expected to be present in client code. They are not Client Secrets.
 
-Never add an access token, refresh token, Client Secret, private key, credentials file, or Google password to the repository, environment template, build output, tests, or logs. The account-chooser implementation stores only its short-lived access token in `chrome.storage.session`; never move it to local/sync storage.
+Never add a real access token, refresh token, Client Secret, private key, credentials file, or Google password to the repository, environment template, build output, tests, or logs. Chooser authorization persists in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`, with a session copy; never expose it to content scripts, web storage or sync storage. Preserve Google's expiry, verify the account on silent renewal, and remove both copies on disconnect.
 
 ## Configure a fork or development OAuth client
 
@@ -62,7 +62,7 @@ The helper writes only public client IDs to ignored `.env.local`. Never copy the
 
 ## Authorization architecture
 
-- With a Web OAuth client, user-initiated connect/account-change calls `launchWebAuthFlow` with `prompt=select_account`; page-load prewarm only reads the existing `chrome.storage.session` token and never opens login UI.
+- With a Web OAuth client, user-initiated connect/account-change calls `launchWebAuthFlow` with `prompt=select_account`. Prewarm restores saved authorization and may use a bounded non-interactive `prompt=none` flow with a verified `login_hint`; it never opens login UI or silently changes accounts.
 - Without a Web OAuth client, the fallback explicitly passes the visible Chrome profile account ID to `getAuthToken`. The UI labels this as the current Chrome account and never claims that Reconnect can choose another account.
 - A 401 clears the rejected provider token. Chooser mode requires a new user-initiated account selection after expiry; it never stores a refresh token.
 - Disconnect clears local provider state, revokes the chooser token through Google's endpoint when available, and stores a non-sensitive disconnect preference.

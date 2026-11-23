@@ -41,7 +41,10 @@ export async function loadJobs(): Promise<void> {
     for (const job of Object.values(records ?? {})) {
       if (job.updatedAt >= cutoff) jobs.set(job.id, job)
     }
-  })()
+  })().catch((error: unknown) => {
+    loaded = undefined
+    throw error
+  })
   await loaded
 }
 
@@ -49,7 +52,7 @@ export async function persistJobs(): Promise<void> {
   const snapshot = Object.fromEntries(
     [...jobs.entries()].map(([id, job]) => [id, cloneJob(job)]),
   )
-  persistQueue = persistQueue.then(async () => {
+  persistQueue = persistQueue.catch(() => undefined).then(async () => {
     await chrome.storage.session.set({ [JOB_STORAGE_KEY]: snapshot })
   })
   await persistQueue
@@ -57,6 +60,13 @@ export async function persistJobs(): Promise<void> {
 
 export async function putJob(job: PickerJob): Promise<void> {
   await loadJobs()
+  const cutoff = Date.now() - JOB_RETENTION_MS
+  for (const [id, existing] of jobs) {
+    if (
+      existing.updatedAt < cutoff &&
+      ['complete', 'cancelled', 'error'].includes(existing.status)
+    ) jobs.delete(id)
+  }
   job.updatedAt = Date.now()
   jobs.set(job.id, job)
   await persistJobs()
@@ -73,7 +83,10 @@ export async function getLatestJobForTab(
   await loadJobs()
   return [...jobs.values()]
     .filter((job) => job.targetTabId === targetTabId)
-    .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    // Earlier jobs may finish after a newer Picker is already open. Their
+    // background updates must not make them the current Picker again.
+    .reverse()
+    .sort((left, right) => right.createdAt - left.createdAt)[0]
 }
 
 export async function getAllJobs(): Promise<PickerJob[]> {

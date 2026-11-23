@@ -73,7 +73,7 @@ https://www.googleapis.com/auth/photospicker.mediaitems.readonly
 
 ## 数据处理说明
 
-> Google 用户数据只用于完成用户主动发起的选图操作。OAuth 通过 Chrome Identity 与 Google 官方 endpoint 完成。账号选择器模式的短期 access token 只在当前浏览器会话内保存在 `chrome.storage.session`，不会发送到项目自建服务器，也不会暴露给 ChatGPT content script。所选照片 bytes 只在浏览器内存中处理，并交给用户当前的 ChatGPT 页面；扩展不会在操作结束后保留它们。项目没有自建后端、分析、遥测、广告或用户数据销售。
+> Google 用户数据只用于完成用户主动发起的选图操作。OAuth 通过 Chrome Identity 与 Google 官方 endpoint 完成。账号选择器授权保存在限制为 `TRUSTED_CONTEXTS` 的 `chrome.storage.local` 中，并有会话副本；保留 Google 有效期，断开连接时删除。已验证的账号标识只用于同一账号的静默续期。Token 不会发送到项目自建服务器，也不会暴露给 ChatGPT content script。所选照片 bytes 只在浏览器内存中处理，并交给用户当前的 ChatGPT 页面；扩展不会在操作结束后保留它们。项目没有自建后端、分析、遥测、广告或用户数据销售。
 
 ## 审核人员操作步骤
 

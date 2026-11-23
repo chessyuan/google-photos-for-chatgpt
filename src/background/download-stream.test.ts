@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type {
   DownloadPortMessage,
@@ -10,6 +10,8 @@ import {
   responseMimeType,
   streamJobToPort,
 } from './download-stream'
+
+afterEach(() => vi.unstubAllGlobals())
 
 function item(mimeType: string): PickedMediaItem {
   return {
@@ -25,6 +27,11 @@ function item(mimeType: string): PickedMediaItem {
 }
 
 describe('downloadUrl', () => {
+  it('requests video bytes rather than a JPEG thumbnail', () => {
+    const video = item('video/mp4')
+    video.type = 'VIDEO'
+    expect(downloadUrl(video)).toBe('https://lh3.googleusercontent.com/example=dv')
+  })
   it('requests original bytes for every supported image format', () => {
     for (const mimeType of [
       'image/jpeg',
@@ -88,6 +95,45 @@ function job(items: PickedMediaItem[]): PickerJob {
 }
 
 describe('streamJobToPort', () => {
+  it.each([false, true])('distinguishes video network failures when CDN permission is %s', async (allowed) => {
+    const video = item('video/mp4')
+    video.type = 'VIDEO'
+    vi.stubGlobal('chrome', { permissions: { contains: vi.fn().mockResolvedValue(allowed) } })
+    const { port } = testPort()
+    const result = await streamJobToPort(port, job([video]), false, undefined, async () => { throw new TypeError('Failed to fetch') })
+    expect(result.downloaded).toBe(0)
+    expect(result.skipped[0]).toContain(allowed ? 'VIDEO_NETWORK_ERROR' : 'VIDEO_PERMISSION_MISSING')
+  })
+  it('streams a video with the MIME and filename of Google’s transcoded response', async () => {
+    const video = item('video/quicktime')
+    video.type = 'VIDEO'
+    video.mediaFile!.filename = 'clip.MOV'
+    const { port, messages } = testPort()
+    const fetchMedia = vi.fn(async (_url: string) => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'video/mp4' } }))
+    await expect(streamJobToPort(port, job([video]), false, undefined, fetchMedia)).resolves.toMatchObject({ downloaded: 1 })
+    expect(fetchMedia.mock.calls[0]?.[0]).toContain('=dv')
+    expect(messages.find((message) => message.type === 'FILE_START')).toMatchObject({ filename: 'clip.mp4', mimeType: 'video/mp4' })
+  })
+
+  it('accepts videos over the image limit but skips videos over the local video limit', async () => {
+    const video = item('video/mp4')
+    video.type = 'VIDEO'
+    const { port } = testPort()
+    await expect(streamJobToPort(port, job([video]), false, undefined, async () => new Response(
+      new Uint8Array([1]), { headers: { 'content-length': String(25 * 1024 * 1024), 'content-type': 'video/mp4' } },
+    ))).resolves.toMatchObject({ downloaded: 1 })
+    await expect(streamJobToPort(port, job([video]), false, undefined, async () => new Response(
+      new Uint8Array([1]), { headers: { 'content-length': String(101 * 1024 * 1024), 'content-type': 'video/mp4' } },
+    ))).resolves.toMatchObject({ downloaded: 0, skipped: [expect.stringContaining('100 MB')] })
+  })
+
+  it('does not pass a video thumbnail off as the video file', async () => {
+    const video = item('video/mp4')
+    video.type = 'VIDEO'
+    await expect(streamJobToPort(testPort().port, job([video]), false, undefined,
+      async () => new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/jpeg' } }),
+    )).resolves.toMatchObject({ downloaded: 0, skipped: [expect.stringContaining('thumbnail')] })
+  })
   it('keeps successful images when one download fails', async () => {
     const first = item('image/jpeg')
     first.id = 'first'
@@ -142,6 +188,50 @@ describe('streamJobToPort', () => {
     )
 
     disconnect()
-    await expect(operation).rejects.toThrow('Aborted')
+    await expect(operation).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('rejects an already cancelled transfer before starting network requests', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const fetchMedia = vi.fn()
+    await expect(streamJobToPort(testPort().port, job([item('image/png')]), false, controller.signal, fetchMedia)).rejects.toThrow()
+    expect(fetchMedia).not.toHaveBeenCalled()
+  })
+
+  it('times out a stalled body and still delivers the other photos', async () => {
+    vi.useFakeTimers()
+    try {
+      const { port, messages } = testPort()
+      const cancel = vi.fn()
+      let calls = 0
+      const operation = streamJobToPort(port, job([item('image/png'), item('image/png')]), false, undefined,
+        async () => ++calls === 1
+          ? new Response(new ReadableStream({ start() {}, cancel }))
+          : new Response(new Uint8Array([1, 2, 3])),
+      )
+      await vi.advanceTimersByTimeAsync(60_000)
+      await expect(operation).resolves.toMatchObject({ downloaded: 1, skipped: [expect.stringContaining('timed out')] })
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(messages.filter((message) => message.type === 'FILE_END').map((message) => message.index)).toEqual([1])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips empty photo responses', async () => {
+    const { port } = testPort()
+    await expect(streamJobToPort(port, job([item('image/png')]), false, undefined,
+      async () => new Response(new Uint8Array()),
+    )).resolves.toMatchObject({ downloaded: 0, skipped: [expect.stringContaining('empty photo')] })
+  })
+
+  it('does not release files if persisting the handoff fails', async () => {
+    const { port, messages } = testPort()
+    await expect(streamJobToPort(port, job([item('image/png')]), false, undefined,
+      async () => new Response(new Uint8Array([1])),
+      async () => { throw new Error('storage unavailable') },
+    )).rejects.toThrow('storage unavailable')
+    expect(messages.some((message) => message.type === 'ALL_DONE')).toBe(false)
   })
 })

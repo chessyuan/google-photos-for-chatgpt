@@ -15,7 +15,7 @@ Include a concise impact description, affected version, reproduction steps with 
 - The extension has no custom backend.
 - Google OAuth is performed through `chrome.identity` and Google's official OAuth endpoints.
 - Selected media is held in memory and handed to the active ChatGPT page after explicit user selection.
-- Temporary Picker state is stored in `chrome.storage.session`. In account-chooser mode, a short-lived access token is also stored there for the current browser session; it is never exposed to the ChatGPT content script. Image bytes are not stored there.
+- Temporary Picker state is stored in `chrome.storage.session`. Chooser authorization is stored in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`, with a session copy; neither token copy is exposed to the ChatGPT content script. Tokens keep Google's expiry and are removed on disconnect. Silent renewal requires a verified account identifier and verifies the replacement token belongs to that account. Image bytes are not stored there.
 - The extension contains no Client Secret, refresh token, private key, analytics, telemetry, or maintainer-operated token service.
 - The production build uses a local-only extension page Content Security Policy.
 

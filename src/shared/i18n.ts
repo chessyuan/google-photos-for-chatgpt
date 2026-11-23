@@ -50,6 +50,10 @@ export const requiredMessageKeys = [
   'browserAuthorizationUnsupported',
   'addingPhotos',
   'photosAdded',
+  'photosHandedOff',
+  'extensionUpdatedReload',
+  'videoDownloadPermissionMissing',
+  'videoDownloadNetworkFailed',
   'compatibilityWarnings',
 ] as const
 
@@ -91,7 +95,7 @@ const englishFallbacks: Record<MessageKey, string> = {
   ready: 'Ready',
   error: 'Error',
   selectFromGooglePhotos: 'Select from Google Photos',
-  maximumPhotos: 'Maximum photos',
+  maximumPhotos: 'Maximum media items',
   openChatGptFirst: 'Open ChatGPT in the active tab first.',
   developmentBuildNotConfigured:
     'This development build is not configured for Google Photos. See the developer documentation.',
@@ -120,8 +124,12 @@ const englishFallbacks: Record<MessageKey, string> = {
     'The previous Picker start was interrupted. Click Google Photos to try again.',
   browserAuthorizationUnsupported:
     'This browser does not support Chrome Google authorization for extensions. Use Google Chrome, or wait for an Edge-compatible OAuth build.',
-  addingPhotos: 'Adding photos…',
-  photosAdded: '$1 photo(s) added to ChatGPT.',
+  addingPhotos: 'Adding images or videos…',
+  photosAdded: '$1 media file(s) added to ChatGPT.',
+  photosHandedOff: '$1 media file(s) handed to ChatGPT. Check the attachment area.',
+  extensionUpdatedReload: 'The extension was updated. Save any unsent draft, then refresh this ChatGPT page and try again.',
+  videoDownloadPermissionMissing: 'Video download permission is not active. Reload the extension and accept its video host permission if Chrome asks. (VIDEO_PERMISSION_MISSING)',
+  videoDownloadNetworkFailed: 'Google video download failed. Check that your network can reach googlevideo.com and try again. (VIDEO_NETWORK_ERROR)',
   compatibilityWarnings: '$1 compatibility warning(s) are available in the extension popup.',
 }
 

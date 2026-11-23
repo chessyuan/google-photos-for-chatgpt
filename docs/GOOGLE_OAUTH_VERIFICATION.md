@@ -118,7 +118,7 @@ Justification:
 
 ### Data handling statement
 
-> Google user data is used only to complete the photo-selection action initiated by the user. OAuth is handled through Chrome Identity and Google's official endpoints. In account-chooser mode, the short-lived access token is held only in `chrome.storage.session` for the current browser session; it is never sent to a project-controlled server or exposed to the ChatGPT content script. Selected photo bytes are processed in browser memory, sent only to the user's active ChatGPT page, and are not retained by the extension after the operation. The project has no backend, analytics, telemetry, advertising, or sale of user data.
+> Google user data is used only to complete the photo-selection action initiated by the user. OAuth is handled through Chrome Identity and Google's official endpoints. Chooser authorization persists in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`, with a session copy; it keeps Google's expiry and is removed on disconnect. A verified account identifier allows silent renewal only for the same account. Tokens are never sent to a project-controlled server or exposed to the ChatGPT content script. Selected photo bytes are processed in browser memory, sent only to the user's active ChatGPT page, and are not retained by the extension after the operation. The project has no backend, analytics, telemetry, advertising, or sale of user data.
 
 ## Reviewer instructions
 

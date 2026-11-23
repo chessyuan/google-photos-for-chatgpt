@@ -1,4 +1,5 @@
 import {
+  AUTH_RENEWAL_ALARM,
   DEFAULT_MAX_ITEM_COUNT,
   MAX_ITEM_COUNT,
   OPENAI_DOCUMENTED_IMAGE_MIME_TYPES,
@@ -23,6 +24,7 @@ import {
   debugLatency,
 } from './shared/debug'
 import { CompletionCoordinator } from './background/completion-coordinator'
+import { recoverOpenChatGPTPages } from './background/content-recovery'
 import { streamJobToPort } from './background/download-stream'
 import {
   authorizedFetch,
@@ -34,6 +36,7 @@ import {
   getGoogleAuthState,
   getManifestClientId,
   isOAuthConfigured,
+  prepareGoogleAuthorization,
 } from './background/google-auth'
 import {
   markGooglePhotosError,
@@ -75,6 +78,7 @@ import {
   performancePoints,
 } from './shared/performance'
 import { message } from './shared/i18n'
+import { isVideo } from './shared/media'
 
 const pickerApi = new PickerApi(authorizedFetch)
 const activePolls = new Set<string>()
@@ -87,6 +91,9 @@ const activeStreams = new Map<string, AbortController>()
 let standbyCreation: Promise<void> | undefined
 let standbyReplaceRequested = false
 let lastPrewarmMissReason: 'auth unavailable' | undefined
+let authMaintenance: Promise<void> | undefined
+let authMaintenanceRequested = false
+let authMaintenanceGeneration = 0
 const terminalStatuses = new Set<JobStatus>([
   'complete',
   'cancelled',
@@ -130,6 +137,12 @@ function transitionJobSession(
   next: NonNullable<PickerJob['sessionState']>,
 ): void {
   job.sessionState = transitionSessionState(job.sessionState, next)
+}
+
+function ensureJobActive(job: PickerJob): void {
+  if (terminalStatuses.has(job.status)) {
+    throw new UserFacingError('This Picker job has already ended.')
+  }
 }
 
 function pickerApiForJob(jobId: string): Promise<PickerApi> {
@@ -363,6 +376,31 @@ function scheduleStandbyPrewarm(replaceUsed = false): void {
   void prewarmStandbySession(replaceUsed)
 }
 
+function scheduleAuthMaintenance(): void {
+  if (authMaintenance) {
+    authMaintenanceRequested = true
+    return
+  }
+  const generation = authMaintenanceGeneration
+  authMaintenance = (async () => {
+    const renewAt = await prepareGoogleAuthorization()
+    if (generation !== authMaintenanceGeneration) return
+    if (renewAt !== undefined) {
+      await chrome.alarms.create(AUTH_RENEWAL_ALARM, { when: renewAt })
+    } else {
+      await chrome.alarms.clear(AUTH_RENEWAL_ALARM)
+    }
+  })().catch(() => {
+    // A later page visit can retry; background maintenance never asks to sign in.
+  }).finally(() => {
+    authMaintenance = undefined
+    if (authMaintenanceRequested) {
+      authMaintenanceRequested = false
+      scheduleAuthMaintenance()
+    }
+  })
+}
+
 async function takeStandbySession(
   maxItemCount: number,
 ): Promise<{
@@ -488,15 +526,26 @@ async function closePickerWindow(job: PickerJob): Promise<void> {
   job.pickerPresentation = undefined
 }
 
+async function newerPickerIsActive(job: PickerJob): Promise<boolean> {
+  const starting = activePickerStartsByTab.get(job.targetTabId)
+  if (starting && starting.id !== job.id) return true
+  const latest = await getLatestJobForTab(job.targetTabId)
+  return Boolean(latest && latest.id !== job.id &&
+    ['authorizing', 'creating_session', 'picking'].includes(latest.status) &&
+    latest.pickerWindowClosedAt === undefined)
+}
+
 async function focusTargetTab(job: PickerJob): Promise<void> {
   try {
+    if (await newerPickerIsActive(job)) return
     const tab = await chrome.tabs.get(job.targetTabId)
     if (!tab.active) {
+      if (await newerPickerIsActive(job)) return
       await chrome.tabs.update(job.targetTabId, { active: true })
     }
     if (tab.windowId !== chrome.windows.WINDOW_ID_NONE) {
       const targetWindow = await chrome.windows.get(tab.windowId)
-      if (!targetWindow.focused) {
+      if (!targetWindow.focused && !(await newerPickerIsActive(job))) {
         await chrome.windows.update(tab.windowId, { focused: true })
       }
     }
@@ -546,6 +595,7 @@ async function cleanupSession(job: PickerJob): Promise<void> {
 }
 
 async function failJob(job: PickerJob, error: unknown): Promise<void> {
+  if (terminalStatuses.has(job.status)) return
   job.error = friendlyError(error)
   if (
     !job.sessionState ||
@@ -573,7 +623,7 @@ async function targetTabExists(job: PickerJob): Promise<boolean> {
   }
 }
 
-function filterPickedImages(job: PickerJob, allItems: PickerJob['mediaItems']) {
+function filterPickedMedia(job: PickerJob, allItems: PickerJob['mediaItems']) {
   const valid = []
   const seenIds = new Set<string>()
   for (const item of allItems ?? []) {
@@ -582,11 +632,10 @@ function filterPickedImages(job: PickerJob, allItems: PickerJob['mediaItems']) {
     const filename = mediaFile?.filename || item.id
 
     if (
-      item.type === 'VIDEO' ||
-      !mimeType.startsWith('image/') ||
+      (!isVideo(item) && !mimeType.startsWith('image/')) ||
       !mediaFile?.baseUrl
     ) {
-      job.warnings.push(filename + ': skipped because it is not a downloadable image.')
+      job.warnings.push(filename + ': skipped because it is not a downloadable image or video.')
       continue
     }
 
@@ -596,6 +645,15 @@ function filterPickedImages(job: PickerJob, allItems: PickerJob['mediaItems']) {
     }
     seenIds.add(item.id)
 
+    if (isVideo(item)) {
+      const status = mediaFile.mediaFileMetadata?.videoMetadata?.processingStatus
+      if (status && status !== 'READY') {
+        job.warnings.push(filename + ': video is not ready in Google Photos (' + status + '). Try again after processing finishes.')
+        continue
+      }
+      valid.push(item)
+      continue
+    }
     if (!SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
       job.warnings.push(
         filename + ': uncommon image MIME type ' + mimeType + '; ChatGPT may reject it.',
@@ -656,11 +714,12 @@ function requestCompletionCheck(job: PickerJob): void {
 
 async function finalizeSelection(job: PickerJob): Promise<void> {
   const finalization = finalizationFlight.run(job.id, async () => {
+    ensureJobActive(job)
     if (!job.sessionId) {
       throw new UserFacingError('Picker session is missing during completion.')
     }
     job.pickerWindowClosedAt = undefined
-    transitionJobSession(job, 'COMPLETING')
+    if (job.sessionState !== 'FETCHING_MEDIA') transitionJobSession(job, 'COMPLETING')
     job.status = 'selected'
     job.message = 'Selection complete. Reading selected media metadata…'
     const selectionPersistence = putJob(job)
@@ -694,16 +753,17 @@ async function finalizeSelection(job: PickerJob): Promise<void> {
       selectionPersistence,
       restoreTarget,
     ])
-    job.mediaItems = filterPickedImages(job, allItems)
+    ensureJobActive(job)
+    job.mediaItems = filterPickedMedia(job, allItems)
     markPerformance(job.performanceTrace, performancePoints.mediaMetadataReady, {
-      note: String(job.mediaItems.length) + ' unique image item(s)',
+      note: String(job.mediaItems.length) + ' unique media item(s)',
     })
 
     if (job.mediaItems.length === 0) {
       throw new UserFacingError(
         allItems.length === 0
-          ? 'The Picker completed without any selected photos.'
-          : 'No selected item is an image that can be sent to ChatGPT.',
+          ? 'The Picker completed without any selected media.'
+          : 'No selected image or video is ready to be sent to ChatGPT.',
       )
     }
 
@@ -713,11 +773,12 @@ async function finalizeSelection(job: PickerJob): Promise<void> {
       )
     }
 
+    ensureJobActive(job)
     transitionJobSession(job, 'METADATA_READY')
     job.status = 'ready'
     job.message =
       String(job.mediaItems.length) +
-      ' photo(s) selected. Downloading directly into memory…'
+      ' media file(s) selected. Downloading directly into memory…'
     const readyPersistence = putJob(job)
     await notifyJob(job)
     await readyPersistence
@@ -744,11 +805,13 @@ async function pollSession(job: PickerJob): Promise<void> {
         : fallbackDeadline
 
     while (Date.now() < deadline) {
+      if (terminalStatuses.has(job.status) || !job.sessionId) return
       const configuredInterval = parseGoogleDuration(
         job.pollingConfig?.pollInterval,
       )
       const interval = configuredInterval > 0 ? configuredInterval : 2000
       const wakeReason = await completionCoordinator.wait(job.id, interval)
+      if (terminalStatuses.has(job.status) || !job.sessionId) return
       if (wakeReason === 'completion') {
         if (completionProbesUsed.has(job.id)) continue
         completionProbesUsed.add(job.id)
@@ -760,6 +823,7 @@ async function pollSession(job: PickerJob): Promise<void> {
 
       markPerformance(job.performanceTrace, performancePoints.sessionGetStart)
       const session = await api.getSession(job.sessionId)
+      if (terminalStatuses.has(job.status)) return
       markPerformance(job.performanceTrace, performancePoints.sessionGetResponse)
       job.pollingConfig = session.pollingConfig
       job.expireTime = session.expireTime
@@ -783,6 +847,7 @@ async function pollSession(job: PickerJob): Promise<void> {
       }
 
       await reconcilePickerWindow(job)
+      if (terminalStatuses.has(job.status)) return
       if (
         pickerCloseIsSettled(
           job.pickerWindowClosedAt,
@@ -809,6 +874,7 @@ async function pollSession(job: PickerJob): Promise<void> {
       )
     }
 
+    if (terminalStatuses.has(job.status)) return
     if (expireAt > 0 && Date.now() >= expireAt) {
       transitionJobSession(job, 'EXPIRED')
     }
@@ -926,6 +992,10 @@ async function openPickerWindow(
       'The browser blocked the Google Photos Picker window.',
     )
   }
+  if (terminalStatuses.has(job.status)) {
+    await chrome.windows.remove(pickerWindow.id)
+    ensureJobActive(job)
+  }
   debugEpochLatency('click → window created', clickStartedAt)
   markPerformance(job.performanceTrace, performancePoints.pickerVisible)
   transitionJobSession(job, 'VISIBLE')
@@ -966,11 +1036,10 @@ async function beginPicker(
           }
         },
         async (accessToken) => {
-          await updateJob(
-            job,
-            'creating_session',
-            message('openingGooglePhotos'),
-          )
+          ensureJobActive(job)
+          job.status = 'creating_session'
+          job.message = message('openingGooglePhotos')
+          await putJob(job)
           const createStartedAt = performance.now()
           try {
             const jobApi = new PickerApi(
@@ -999,12 +1068,18 @@ async function beginPicker(
       job.sessionId = session.id
       job.expireTime = session.expireTime
       job.pollingConfig = session.pollingConfig
+      if (terminalStatuses.has(job.status)) {
+        await cleanupSession(job)
+        ensureJobActive(job)
+      }
       transitionJobSession(job, 'READY')
       pickerUri = appendAutoclose(session.pickerUri)
       await putJob(job)
     }
 
+    ensureJobActive(job)
     await openPickerWindow(job, pickerUri, clickStartedAt)
+    ensureJobActive(job)
     job.status = 'picking'
     transitionJobSession(job, 'WAITING_SELECTION')
     job.message =
@@ -1080,6 +1155,15 @@ async function startPicker(
           pickerReused: true,
         }
       }
+      // Closing can mean either cancellation or Google's /autoclose after
+      // Done. Continue checking the old session without blocking a new Picker.
+      if (existing.pickerWindowClosedAt === undefined) {
+        markPickerClosed(existing)
+        existing.pickerWindowId = undefined
+        existing.pickerTabId = undefined
+        existing.pickerPresentation = undefined
+        void putJob(existing).catch(() => undefined)
+      }
       requestCompletionCheck(existing)
     } else if (disposition === 'wait') {
       void notifyJob(existing)
@@ -1137,13 +1221,17 @@ async function startPicker(
   activePickerStartsByTab.set(tabId, job)
   try {
     await putJob(job)
-    await notifyJob(job)
     const taken =
       kind === 'chatgpt'
         ? await takeStandbySession(requestedMaximum)
         : { standby: undefined }
     const standby = taken.standby
     if (standby) {
+      if (terminalStatuses.has(job.status)) {
+        job.sessionId = standby.sessionId
+        await cleanupSession(job)
+        ensureJobActive(job)
+      }
       job.status = 'picking'
       job.message =
         'Google Photos Picker is open. Choose one or more photos and click Done.'
@@ -1167,6 +1255,7 @@ async function startPicker(
       pickerMode,
     }
   } finally {
+    if (kind === 'chatgpt') scheduleAuthMaintenance()
     if (activePickerStartsByTab.get(tabId)?.id === job.id) {
       activePickerStartsByTab.delete(tabId)
     }
@@ -1228,6 +1317,7 @@ async function handleRequest(
     case 'START_PICKER':
       return startPicker(request, sender)
     case 'WARM_PICKER':
+      scheduleAuthMaintenance()
       await prewarmStandbySession(false)
       return { ok: true }
     case 'GET_JOB': {
@@ -1235,7 +1325,11 @@ async function handleRequest(
       if (tabId === undefined) return { ok: true }
       const job = await getLatestJobForTab(tabId)
       if (job) await cancelOrphanedPickerStart(job)
-      return { ok: true, job: job ? publicJob(job) : undefined }
+      const readyJobs = (await getAllJobs())
+        .filter((item) => item.targetTabId === tabId && item.status === 'ready')
+        .sort((left, right) => left.createdAt - right.createdAt)
+        .map(publicJob)
+      return { ok: true, job: job ? publicJob(job) : undefined, readyJobs }
     }
     case 'GET_CONFIG':
       return {
@@ -1246,28 +1340,34 @@ async function handleRequest(
       }
     case 'GET_AUTH_STATE': {
       const authState = await getGoogleAuthState()
+      scheduleAuthMaintenance()
       if (authState.status === 'checking') scheduleStandbyPrewarm(false)
       return { ok: true, authState }
     }
     case 'CONNECT_AUTH':
       if (request.force) {
+        authMaintenanceGeneration += 1
         await cancelActiveJobsForAuthorizationChange()
         if (standbyCreation) await standbyCreation
         await discardStandbySession()
       }
       await connectGooglePhotos(Boolean(request.force))
+      scheduleAuthMaintenance()
       await prewarmStandbySession(false)
       return { ok: true, authState: await getGoogleAuthState() }
     case 'DISCONNECT_AUTH':
     case 'CLEAR_AUTH':
+      authMaintenanceGeneration += 1
       await cancelActiveJobsForAuthorizationChange()
       if (standbyCreation) await standbyCreation
       await discardStandbySession()
       await disconnectGooglePhotos()
+      await chrome.alarms.clear(AUTH_RENEWAL_ALARM)
       return { ok: true, authState: await getGoogleAuthState() }
     case 'CANCEL_JOB': {
       const job = await getJob(request.jobId)
       if (!job) throw new UserFacingError('Picker job was not found.')
+      if (terminalStatuses.has(job.status)) return { ok: true, job: publicJob(job) }
       transitionJobSession(job, 'CANCELLED')
       activeStreams.get(job.id)?.abort()
       await updateJob(job, 'cancelled', 'Picker job cancelled.')
@@ -1279,6 +1379,10 @@ async function handleRequest(
     case 'ATTACH_RESULT': {
       const job = await getJob(request.jobId)
       if (!job) throw new UserFacingError('Picker job was not found.')
+      if (terminalStatuses.has(job.status)) return { ok: true, job: publicJob(job) }
+      if (job.status !== 'attaching') {
+        throw new UserFacingError('The photo download has not finished yet.')
+      }
       const { performanceEntries, ...attachment } = request.result
       job.attachment = attachment
       if (performanceEntries) {
@@ -1301,12 +1405,13 @@ async function handleRequest(
           job,
           'complete',
           String(request.result.attempted) +
-            ' photo(s) handed to ChatGPT via ' +
+            ' media file(s) handed to ChatGPT via ' +
             request.result.method +
             '. ' +
             verification,
         )
       }
+      await cleanupSession(job)
       return { ok: true, job: publicJob(job) }
     }
   }
@@ -1333,14 +1438,18 @@ chrome.runtime.onConnect.addListener((port) => {
   if (!port.name.startsWith('gpfc-download:')) return
   const jobId = port.name.slice('gpfc-download:'.length)
   let portDisconnected = false
+  let portController: AbortController | undefined
   port.onDisconnect.addListener(() => {
     portDisconnected = true
+    portController?.abort()
   })
 
   port.onMessage.addListener((message: DownloadPortMessage) => {
     if (message.type !== 'START_DOWNLOAD' || activeStreams.has(jobId)) return
     const streamController = new AbortController()
+    portController = streamController
     activeStreams.set(jobId, streamController)
+    let downloadJob: PickerJob | undefined
 
     void (async () => {
       const job = await getJob(jobId)
@@ -1353,40 +1462,39 @@ chrome.runtime.onConnect.addListener((port) => {
           'Picker job is not ready for download (status: ' + job.status + ').',
         )
       }
+      downloadJob = job
+      if (portDisconnected) streamController.abort()
+      streamController.signal.throwIfAborted()
 
       await updateJob(
         job,
         'downloading',
-        'Downloading selected photos into browser memory…',
+        'Downloading selected images and videos into browser memory…',
       )
-      const result = await streamJobToPort(
+      await streamJobToPort(
         port,
         job,
         message.supportsBinary === true,
         streamController.signal,
+        undefined,
+        async (result) => {
+          ensureJobActive(job)
+          if (result.downloaded === 0) {
+            throw new UserFacingError(
+              'No media could be downloaded. ' + result.skipped.join(' | '),
+            )
+          }
+          if (result.skipped.length > 0) job.warnings.push(...result.skipped)
+          // Persist before releasing files to the receiver. Keep the Picker
+          // session alive until its attachment acknowledgement so retries work.
+          await updateJob(job, 'attaching', 'Adding downloaded media to ChatGPT…')
+          ensureJobActive(job)
+        },
       )
-      if (result.skipped.length > 0) job.warnings.push(...result.skipped)
-
-      if (result.downloaded === 0) {
-        throw new UserFacingError(
-          'No photo could be downloaded. ' + result.skipped.join(' | '),
-        )
-      }
-
-      await cleanupSession(job)
-      if (job.status === 'downloading') {
-        await updateJob(
-          job,
-          'attaching',
-          'Downloaded ' +
-            result.downloaded +
-            ' photo(s). Adding them to ChatGPT…',
-        )
-      }
     })()
       .catch(async (error: unknown) => {
-        const job = await getJob(jobId)
-        if (job?.status === 'cancelled') return
+        const job = downloadJob
+        if (job && terminalStatuses.has(job.status)) return
         if (job) {
           if (portDisconnected) {
             await updateJob(
@@ -1448,6 +1556,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 })
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === AUTH_RENEWAL_ALARM) {
+    void chrome.tabs.query({ url: 'https://chatgpt.com/*' }).then((tabs) => {
+      if (tabs.length > 0) scheduleAuthMaintenance()
+    }).catch(() => undefined)
+    return
+  }
   if (alarm.name !== STANDBY_SESSION_ALARM) return
   void (async () => {
     const standby = await withStandbySessionLock(readStandbySession)
@@ -1479,19 +1593,34 @@ async function resumeJobs(): Promise<void> {
       void finalizeSelection(job).catch((error: unknown) => failJob(job, error))
     } else if (job.status === 'ready') {
       await notifyJob(job)
-    } else if (job.status === 'downloading' || job.status === 'attaching') {
+    } else if (job.status === 'attaching') {
+      await updateJob(
+        job,
+        'error',
+        'The extension restarted while adding photos. Check ChatGPT attachments before selecting again.',
+      )
+      await cleanupSession(job)
+    } else if (job.status === 'downloading') {
       await updateJob(
         job,
         'ready',
         'The extension background restarted. Reload ChatGPT to retry the in-memory download.',
       )
     } else if (
-      (job.status === 'authorizing' || job.status === 'creating_session') &&
-      !job.sessionId
+      job.status === 'authorizing' || job.status === 'creating_session'
     ) {
       await cancelOrphanedPickerStart(job)
     }
   }
 }
 
-void resumeJobs()
+chrome.runtime.onInstalled.addListener(() => {
+  void recoverOpenChatGPTPages().catch(() => undefined)
+})
+chrome.runtime.onStartup.addListener(() => {
+  void recoverOpenChatGPTPages().catch(() => undefined)
+})
+
+void resumeJobs().catch((error: unknown) => {
+  debugEvent('could not resume Picker jobs', { error: friendlyError(error) })
+})

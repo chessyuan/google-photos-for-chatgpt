@@ -1,6 +1,8 @@
 # 隐私政策 — Google Photos for ChatGPT
 
-最后更新：2026 年 8 月 15 日
+最后更新：2026 年 10 月 17 日
+
+本次补充：用户主动选择的图片及视频均可在浏览器内存中处理并交付 ChatGPT。新增的 `scripting` 权限仅用于更新后向已授权的 ChatGPT 页面重新挂载扩展本地脚本，不会自动刷新页面或发送草稿。Google scope 不变；视频下载新增 `https://*.googlevideo.com/*` 网络权限，用于跟随 Google 视频 CDN 跳转，内容脚本仍仅在 ChatGPT 注入。
 
 Google Photos for ChatGPT 是独立开源浏览器扩展，与 Google 或 OpenAI 不存在隶属、背书、赞助或官方合作关系。
 
@@ -14,7 +16,7 @@ Google Photos for ChatGPT 是独立开源浏览器扩展，与 Google 或 OpenAI
 - 扩展绝不会要求用户在扩展中输入 Google 密码。
 - Google Photos 权限只有 `https://www.googleapis.com/auth/photospicker.mediaitems.readonly`。
 - 此 scope 允许扩展创建、查询和删除 Picker session，并读取用户在该 Picker session 中明确选择的媒体项目。
-- 扩展不会向普通用户显示 OAuth token，不会把 token 发送到项目自建服务器、写入仓库文件、`localStorage` 或 Downloads。账号选择器模式的 access token 是短期 token，只保存在当前浏览器会话的 `chrome.storage.session` 中，也不会暴露给 ChatGPT content script。
+- 扩展不会向普通用户显示 OAuth token，不会把 token 发送到项目自建服务器、写入仓库文件、网页 `localStorage` 或 Downloads。账号选择器的短期 token 保存在限制为 `TRUSTED_CONTEXTS` 的 `chrome.storage.local`，并有会话副本，使尚未过期的登录能跨浏览器重启或扩展重载恢复；ChatGPT content script 无法读取它。
 - “断开 Google 相册”会清理本地授权状态和会话 token；账号选择器模式还会请求 Google 官方 revoke endpoint 撤销 token。扩展只在 `chrome.storage.local` 保存一个非敏感的断开连接布尔偏好，防止重新连接前继续后台预热。
 
 ## 照片数据
@@ -29,7 +31,7 @@ Google Photos for ChatGPT 是独立开源浏览器扩展，与 Google 或 OpenAI
 
 `chrome.storage.session` 可能短暂保存 Picker session ID、过期时间、轮询配置、窗口/标签 ID、传输元数据、文件名、MIME type、任务状态、警告和性能时间点，用于 Manifest V3 Service Worker 休眠恢复。浏览器会话结束后这些数据会清空。
 
-`chrome.storage.local` 只保存用户主动断开连接的状态偏好。账号选择器模式使用 `chrome.storage.session` 保存短期 access token 和临时 Picker/job 状态。任何存储区域都不会保存 refresh token、Client Secret、图片 bytes、Google 密码或 Google 账号凭据。
+`chrome.storage.local` 保存断开连接偏好，以及账号选择器的短期 token、Google 返回的过期时间、所选账号标识和选择时间。扩展不延长 token 的有效期。过期 token 不能访问 API；只对已验证的同一账号尝试 Google 静默续期。如 Google 要求重新登录或同意授权，会在下次用户操作时发起授权。任何存储区域都不会保存 refresh token、Client Secret、图片 bytes、Google 密码或私钥。断开连接会删除两份授权及账号标识。
 
 ## 数据流向
 
@@ -44,7 +46,7 @@ Google Photos for ChatGPT 是独立开源浏览器扩展，与 Google 或 OpenAI
 
 ## 保留与删除
 
-- Chrome 配置文件降级模式的 token 保留在 Chrome Identity 缓存；账号选择器模式的短期 token 只保留在 `chrome.storage.session`。两者都可以通过“断开 Google 相册”清理本地状态。
+- Chrome 配置文件降级模式的 token 保留在 Chrome Identity 缓存；账号选择器 token 保留在限制为可信扩展上下文的存储中。两者都可以通过“断开 Google 相册”清理本地状态。
 - 扩展会在完成、取消、过期或失败后尽力删除 Picker session；Google 也会在服务器端使 session 过期。
 - 图片 bytes 只在当前内存传输期间存在，操作结束或浏览器上下文结束后不会由扩展保留。
 - `chrome.storage.session` 临时数据随浏览器会话结束而清空。

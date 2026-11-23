@@ -1,9 +1,9 @@
 {
   "name": "google-photos-for-chatgpt",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "A Chrome extension that lets you pick photos from Google Photos and use them directly in ChatGPT.",
+  "description": "A Chrome extension that lets you pick photos and videos from Google Photos and use them directly in ChatGPT.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -31,6 +31,14 @@
     "build": "vite build && vite build --config vite.content.config.ts",
     "build:debug": "vite build --mode development && vite build --config vite.content.config.ts --mode development",
     "benchmark:data-path": "node scripts/benchmark-data-path.mjs",
+    "test:browser-layout": "node scripts/browser-layout-smoke.mjs",
+    "test:browser-overlap": "node scripts/browser-overlap-smoke.mjs",
+    "test:browser-visibility": "node scripts/browser-visibility-smoke.mjs",
+    "test:browser-wide-layout": "node scripts/browser-wide-layout-smoke.mjs",
+    "test:browser-picker-reopen": "node scripts/browser-picker-reopen-smoke.mjs",
+    "test:browser-attachment": "node scripts/browser-attachment-smoke.mjs",
+    "test:browser-runtime": "node scripts/browser-runtime-smoke.mjs",
+    "test:browser-download": "node scripts/browser-download-smoke.mjs",
     "verify:dist": "node scripts/verify-dist.mjs"
   },
   "engines": {

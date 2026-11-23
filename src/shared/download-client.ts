@@ -1,4 +1,5 @@
 import { errorMessage } from './errors'
+import { mediaByteLimit, TRANSFER_LIMIT_BYTES } from './media'
 import {
   epochPerformanceNow,
   performanceDebugEnabled,
@@ -12,6 +13,7 @@ interface PendingFile {
   mimeType: string
   lastModified: number
   chunks: Uint8Array<ArrayBuffer>[]
+  size: number
 }
 
 export interface DownloadResult {
@@ -48,10 +50,21 @@ export function downloadJobFiles(
     const completed = new Map<number, File>()
     const performanceEntries: PerformanceEntry[] = []
     let settled = false
+    let receivedBytes = 0
+    let idleTimer: ReturnType<typeof setTimeout>
+    const resetDeadline = () => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        finish(() => reject(new Error('The photo download stopped responding. Please try again.')))
+      }, 90_000)
+    }
 
     const finish = (operation: () => void) => {
       if (settled) return
       settled = true
+      clearTimeout(idleTimer)
+      pending.clear()
+      completed.clear()
       operation()
       port.disconnect()
     }
@@ -70,6 +83,8 @@ export function downloadJobFiles(
     })
 
     port.onMessage.addListener((rawMessage: DownloadPortMessage) => {
+      if (settled) return
+      resetDeadline()
       const message = rawMessage
       try {
         if (message.type === 'FILE_START') {
@@ -78,15 +93,24 @@ export function downloadJobFiles(
             mimeType: message.mimeType,
             lastModified: message.lastModified,
             chunks: [],
+            size: 0,
           })
           onProgress?.('Downloading ' + message.filename + '…')
         } else if (message.type === 'FILE_CHUNK') {
           const file = pending.get(message.index)
           if (!file) throw new Error('Received bytes before file metadata.')
-          file.chunks.push(base64ToBytes(message.base64))
+          const bytes = base64ToBytes(message.base64)
+          file.size += bytes.byteLength
+          receivedBytes += bytes.byteLength
+          if (file.size > mediaByteLimit(file.mimeType)) throw new Error('Downloaded media exceeds the size limit.')
+          if (receivedBytes > TRANSFER_LIMIT_BYTES) throw new Error('This selection exceeds the extension’s 200 MB memory budget.')
+          file.chunks.push(bytes)
         } else if (message.type === 'FILE_END') {
           const file = pending.get(message.index)
           if (!file) throw new Error('Received a file end before file metadata.')
+          if (file.size !== message.size || file.size === 0) {
+            throw new Error('The downloaded photo is incomplete. Please try again.')
+          }
           const receivedAt = epochPerformanceNow()
           if (performanceDebugEnabled) {
             performanceEntries.push({
@@ -116,6 +140,11 @@ export function downloadJobFiles(
           pending.delete(message.index)
           onProgress?.('Ready: ' + file.filename)
         } else if (message.type === 'FILE_BLOB') {
+          if (!(message.blob instanceof Blob) || message.blob.size !== message.size || message.size === 0 || message.size > mediaByteLimit(message.mimeType)) {
+            throw new Error('The downloaded photo is incomplete. Please try again.')
+          }
+          receivedBytes += message.size
+          if (receivedBytes > TRANSFER_LIMIT_BYTES) throw new Error('This selection exceeds the extension’s 200 MB memory budget.')
           if (performanceDebugEnabled) {
             performanceEntries.push({
               point: performancePoints.contentReceivedFile,
@@ -152,6 +181,9 @@ export function downloadJobFiles(
             performanceEntries.push(...message.entries)
           }
         } else if (message.type === 'ALL_DONE') {
+          if (pending.size > 0 || completed.size !== message.downloaded) {
+            throw new Error('The photo download ended before all files arrived. Please try again.')
+          }
           const files = [...completed.entries()]
             .sort(([left], [right]) => left - right)
             .map(([, file]) => file)
@@ -175,6 +207,11 @@ export function downloadJobFiles(
       type: 'START_DOWNLOAD',
       supportsBinary: supportsBinaryMessaging(),
     }
-    port.postMessage(start)
+    resetDeadline()
+    try {
+      port.postMessage(start)
+    } catch (error) {
+      finish(() => reject(new Error(errorMessage(error))))
+    }
   })
 }

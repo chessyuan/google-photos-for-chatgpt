@@ -129,11 +129,24 @@ export async function consumeStandbySession(
 export async function consumeStandbyAfterCreation(
   maxItemCount: number,
   inFlightCreation: Promise<unknown> | undefined,
-  now = Date.now(),
+  now?: number,
+  waitMilliseconds = 250,
 ): Promise<StandbyConsumeResult> {
   let result = await consumeStandbySession(maxItemCount, now)
   if (result.missReason === 'no session' && inFlightCreation) {
-    await inFlightCreation
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        // A failed speculative request must not fail the user's click.
+        inFlightCreation.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, waitMilliseconds)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    // Recheck expiry at consumption time, after the wait.
     result = await consumeStandbySession(maxItemCount, now)
   }
   return result

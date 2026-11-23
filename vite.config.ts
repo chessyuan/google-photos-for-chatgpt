@@ -15,7 +15,7 @@ function manifestPlugin(clientId: string): Plugin {
       const manifest = {
         manifest_version: 3,
         name: '__MSG_extensionName__',
-        version: '1.1.0',
+        version: '1.2.0',
         description: '__MSG_extensionDescription__',
         default_locale: 'en',
         minimum_chrome_version: '120',
@@ -24,6 +24,7 @@ function manifestPlugin(clientId: string): Plugin {
           'identity',
           'identity.email',
           'storage',
+          'scripting',
           'activeTab',
           'alarms',
         ],
@@ -32,6 +33,7 @@ function manifestPlugin(clientId: string): Plugin {
           'https://photospicker.googleapis.com/*',
           'https://oauth2.googleapis.com/*',
           'https://lh3.googleusercontent.com/*',
+          'https://*.googlevideo.com/*',
         ],
         oauth2: {
           client_id: clientId,
@@ -50,7 +52,7 @@ function manifestPlugin(clientId: string): Plugin {
           {
             matches: ['https://chatgpt.com/*'],
             js: ['content.js'],
-            run_at: 'document_idle',
+            run_at: 'document_end',
           },
         ],
         content_security_policy: {

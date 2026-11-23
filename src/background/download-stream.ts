@@ -1,9 +1,9 @@
 import {
-  CHATGPT_IMAGE_LIMIT_BYTES,
   DOWNLOAD_CHUNK_BYTES,
   DOWNLOAD_CONCURRENCY,
 } from '../shared/constants'
 import { errorMessage, UserFacingError } from '../shared/errors'
+import { message } from '../shared/i18n'
 import {
   epochPerformanceNow,
   markPerformance,
@@ -18,6 +18,8 @@ import type {
   PickedMediaItem,
 } from '../shared/types'
 import { mapConcurrentOrdered } from './download-queue'
+import { withRequestDeadline } from './request-deadline'
+import { isVideo, mediaByteLimit, mediaFilename, TRANSFER_LIMIT_BYTES, VIDEO_LIMIT_BYTES } from '../shared/media'
 import {
   createAuthorizedFetchSession,
   type AuthorizedFetch,
@@ -44,7 +46,7 @@ export function downloadUrl(item: PickedMediaItem): string {
   // Picker media metadata describes the original file. Requesting a resized
   // rendition can change the encoded bytes while retaining the original
   // filename, which ChatGPT may reject as a filename/MIME mismatch.
-  return baseUrl + '=d'
+  return baseUrl + (isVideo(item) ? '=dv' : '=d')
 }
 
 export function responseMimeType(response: Response, fallback: string): string {
@@ -56,9 +58,9 @@ export function responseMimeType(response: Response, fallback: string): string {
     ?.split(';', 1)[0]
     ?.trim()
     .toLowerCase()
-  return responseMimeType?.startsWith('image/')
+  return responseMimeType?.startsWith('image/') || responseMimeType?.startsWith('video/')
     ? responseMimeType
-    : 'application/octet-stream'
+    : pickerMimeType?.startsWith('video/') ? pickerMimeType : 'application/octet-stream'
 }
 
 function record(
@@ -72,31 +74,44 @@ function record(
   if (performanceDebugEnabled) entries.push({ point, at, ...details })
 }
 
-async function readResponseBytes(
+async function* responseChunks(
   response: Response,
   signal: AbortSignal,
-): Promise<{ chunks: Uint8Array<ArrayBuffer>[]; total: number }> {
+  limit: number,
+  budget: { bytes: number },
+): AsyncGenerator<Uint8Array<ArrayBuffer>> {
   if (!response.body) {
     throw new UserFacingError('Google media download returned no byte stream.')
   }
 
   const reader = response.body.getReader()
-  const chunks: Uint8Array<ArrayBuffer>[] = []
   let total = 0
-  while (true) {
-    signal.throwIfAborted()
-    const { done, value } = await reader.read()
-    if (done) break
-    total += value.byteLength
-    if (total > CHATGPT_IMAGE_LIMIT_BYTES) {
-      await reader.cancel()
-      throw new UserFacingError(
-        "File exceeded ChatGPT's documented 20 MB image limit while downloading.",
-      )
+  const cancel = () => { void reader.cancel().catch(() => undefined) }
+  signal.addEventListener('abort', cancel, { once: true })
+  try {
+    while (true) {
+      signal.throwIfAborted()
+      const { done, value } = await reader.read()
+      signal.throwIfAborted()
+      if (done) break
+      total += value.byteLength
+      if (total > limit) {
+        throw new UserFacingError(
+          'File exceeded the ' + String(limit / 1024 / 1024) + ' MB download limit.',
+        )
+      }
+      budget.bytes += value.byteLength
+      if (budget.bytes > TRANSFER_LIMIT_BYTES) {
+        throw new UserFacingError('This selection exceeds the extension’s 200 MB memory budget. Select fewer files.')
+      }
+      yield new Uint8Array(value)
     }
-    chunks.push(new Uint8Array(value))
+    if (total === 0) throw new UserFacingError('Google returned an empty photo. Please try again.')
+  } finally {
+    signal.removeEventListener('abort', cancel)
+    cancel()
+    reader.releaseLock()
   }
-  return { chunks, total }
 }
 
 async function downloadResponse(
@@ -104,7 +119,23 @@ async function downloadResponse(
   item: PickedMediaItem,
   signal: AbortSignal,
 ): Promise<Response> {
-  const response = await fetchMedia(downloadUrl(item), { signal })
+  let response: Response
+  try {
+    response = await fetchMedia(downloadUrl(item), { signal })
+  } catch (error) {
+    if (signal.aborted || !isVideo(item) || !(error instanceof TypeError)) throw error
+    let hasVideoPermission: boolean | undefined
+    try {
+      if (typeof chrome !== 'undefined' && chrome.permissions?.contains) {
+        hasVideoPermission = await chrome.permissions.contains({ origins: ['https://*.googlevideo.com/*'] })
+      }
+    } catch {
+      // A failed diagnostic must not hide the original download failure.
+    }
+    throw new UserFacingError(message(
+      hasVideoPermission === false ? 'videoDownloadPermissionMissing' : 'videoDownloadNetworkFailed',
+    ), { cause: error })
+  }
   if (!response.ok) {
     throw new UserFacingError(
       'Google media download failed (' +
@@ -115,12 +146,17 @@ async function downloadResponse(
     )
   }
   const expectedSize = Number(response.headers.get('content-length') || 0)
-  if (expectedSize > CHATGPT_IMAGE_LIMIT_BYTES) {
+  const limit = isVideo(item) ? VIDEO_LIMIT_BYTES : mediaByteLimit(item.mediaFile?.mimeType ?? '')
+  if (isVideo(item) && response.headers.get('content-type')?.startsWith('image/')) {
+    await response.body?.cancel()
+    throw new UserFacingError('Google returned a video thumbnail instead of video bytes. Try again after video processing finishes.')
+  }
+  if (expectedSize > limit) {
     await response.body?.cancel()
     throw new UserFacingError(
       'File is ' +
         (expectedSize / 1024 / 1024).toFixed(1) +
-        " MB; ChatGPT's documented image limit is 20 MB.",
+        ' MB; the extension limit for this file is ' + String(limit / 1024 / 1024) + ' MB.',
     )
   }
   return response
@@ -133,6 +169,7 @@ async function sendOneBinary(
   index: number,
   signal: AbortSignal,
   fetchMedia: AuthorizedFetch,
+  budget: { bytes: number },
 ): Promise<number> {
   const mediaFile = item.mediaFile
   if (!mediaFile) throw new UserFacingError('Selected item has no media file.')
@@ -147,7 +184,12 @@ async function sendOneBinary(
     mimeType,
   })
   record(job, entries, performancePoints.imageBodyStart, details)
-  const { chunks, total } = await readResponseBytes(response, signal)
+  const chunks: Uint8Array<ArrayBuffer>[] = []
+  let total = 0
+  for await (const chunk of responseChunks(response, signal, mediaByteLimit(mimeType), budget)) {
+    chunks.push(chunk)
+    total += chunk.byteLength
+  }
   const blob = new Blob(chunks, { type: mimeType })
   record(job, entries, performancePoints.imageBlobReady, {
     ...details,
@@ -158,7 +200,7 @@ async function sendOneBinary(
   post(port, {
     type: 'FILE_BLOB',
     index,
-    filename: mediaFile.filename || 'google-photo-' + (index + 1),
+    filename: mediaFilename(mediaFile.filename || 'google-media-' + (index + 1), mimeType),
     mimeType,
     lastModified: Date.parse(item.createTime) || Date.now(),
     blob,
@@ -175,6 +217,7 @@ async function sendOneBase64(
   index: number,
   signal: AbortSignal,
   fetchMedia: AuthorizedFetch,
+  budget: { bytes: number },
 ): Promise<number> {
   const mediaFile = item.mediaFile
   if (!mediaFile) throw new UserFacingError('Selected item has no media file.')
@@ -192,29 +235,16 @@ async function sendOneBase64(
   post(port, {
     type: 'FILE_START',
     index,
-    filename: mediaFile.filename || 'google-photo-' + (index + 1),
+    filename: mediaFilename(mediaFile.filename || 'google-media-' + (index + 1), mimeType),
     mimeType,
     lastModified: Date.parse(item.createTime) || Date.now(),
     expectedSize: Number(response.headers.get('content-length') || 0) || undefined,
   })
 
-  if (!response.body) {
-    throw new UserFacingError('Google media download returned no byte stream.')
-  }
-  const reader = response.body.getReader()
   let total = 0
   record(job, entries, performancePoints.imageBodyStart, details)
-  while (true) {
-    signal.throwIfAborted()
-    const { done, value } = await reader.read()
-    if (done) break
+  for await (const value of responseChunks(response, signal, mediaByteLimit(mimeType), budget)) {
     total += value.byteLength
-    if (total > CHATGPT_IMAGE_LIMIT_BYTES) {
-      await reader.cancel()
-      throw new UserFacingError(
-        "File exceeded ChatGPT's documented 20 MB image limit while downloading.",
-      )
-    }
     for (
       let offset = 0;
       offset < value.byteLength;
@@ -242,13 +272,16 @@ export async function streamJobToPort(
   supportsBinary = false,
   externalSignal?: AbortSignal,
   fetchMediaOverride?: AuthorizedFetch,
+  beforeComplete?: (result: { downloaded: number; skipped: string[] }) => Promise<void>,
 ): Promise<{ downloaded: number; skipped: string[] }> {
   const mediaItems = job.mediaItems ?? []
   if (mediaItems.length === 0) {
-    throw new UserFacingError('This Picker job has no selected image items.')
+    throw new UserFacingError('This Picker job has no selected media items.')
   }
 
   const controller = new AbortController()
+  const budget = { bytes: 0 }
+  externalSignal?.throwIfAborted()
   port.onDisconnect.addListener(() => controller.abort())
   externalSignal?.addEventListener('abort', () => controller.abort(), {
     once: true,
@@ -262,25 +295,14 @@ export async function streamJobToPort(
     async (item, index) => {
       const filename = item.mediaFile?.filename || 'item-' + (index + 1)
       try {
-        if (supportsBinary) {
-          await sendOneBinary(
-            port,
-            job,
-            item,
-            index,
-            controller.signal,
-            fetchMedia,
-          )
-        } else {
-          await sendOneBase64(
-            port,
-            job,
-            item,
-            index,
-            controller.signal,
-            fetchMedia,
-          )
-        }
+        await withRequestDeadline(
+          (signal) => supportsBinary
+            ? sendOneBinary(port, job, item, index, signal, fetchMedia, budget)
+            : sendOneBase64(port, job, item, index, signal, fetchMedia, budget),
+          60_000,
+          new UserFacingError('Photo download timed out. Please try again.'),
+          controller.signal,
+        )
         return { downloaded: true as const }
       } catch (error) {
         if (controller.signal.aborted) throw error
@@ -300,6 +322,8 @@ export async function streamJobToPort(
   const skipped = outcomes.flatMap((outcome) =>
     outcome.downloaded ? [] : [outcome.detail],
   )
+  controller.signal.throwIfAborted()
+  await beforeComplete?.({ downloaded, skipped })
   post(port, { type: 'ALL_DONE', downloaded, skipped })
   return { downloaded, skipped }
 }

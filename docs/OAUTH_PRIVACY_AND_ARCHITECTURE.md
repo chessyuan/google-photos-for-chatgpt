@@ -51,7 +51,7 @@ No Client Secret or refresh token is compiled into the extension.
 ```text
 User clicks the Google Photos button
 → Google account chooser and OAuth consent
-→ short-lived access token in chrome.storage.session
+→ short-lived access token in trusted extension storage
 → POST photospicker.googleapis.com/v1/sessions
 → official Google Photos Picker opens
 → user explicitly selects media and presses Done
@@ -67,7 +67,7 @@ The project has no maintainer-operated backend in this flow.
 ## What remains local
 
 - Picker job state, expiration, polling configuration, and window/tab identifiers are temporary browser-session data.
-- The chooser-mode access token is kept only in `chrome.storage.session` and is removed on disconnect or browser-session end.
+- Chooser authorization survives browser restart in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`, with a session copy. It retains Google's expiry and is removed on disconnect. A verified account identifier enables bounded silent renewal; the returned token must belong to the same account.
 - Selected photo bytes are represented as in-memory `Blob` and `File` objects.
 - The extension does not intentionally write photos to Windows Downloads.
 - The project has no analytics, telemetry, advertising SDK, or remote executable code.
@@ -85,13 +85,13 @@ The project maintainer does not receive these tokens, photos, filenames, or Chat
 ## OAuth and Picker lifecycle
 
 1. A real account-selection action starts only after a user click.
-2. The extension validates the OAuth `state` value and the fixed redirect origin.
+2. The extension validates the OAuth `state` value and fixed redirect origin and path.
 3. The token must include the exact Picker scope.
 4. “Connected” appears only after a real Picker `sessions.create` request succeeds.
 5. A standby session may be created after authorization so the next Picker opens faster.
 6. A standby session is atomically consumed once and checked against Google's `expireTime`.
 7. Switching or disconnecting accounts closes active Picker windows and deletes obsolete sessions.
-8. `401` responses clear the rejected token; the extension does not keep a refresh token.
+8. `401` responses invalidate the rejected token and try one renewal. Chooser renewal is non-interactive and bound to the verified selected account. The extension does not keep a refresh token.
 
 ## ChatGPT attachment path
 
@@ -108,7 +108,7 @@ ChatGPT is a changing third-party SPA, so future UI changes may require maintena
 
 | Data | Location | Retention |
 |---|---|---|
-| Short-lived chooser access token | `chrome.storage.session` | Browser session, disconnect, or token rejection |
+| Short-lived chooser access token and account binding | Trusted `chrome.storage.local`, session copy | Google-issued lifetime for API access; replaced on renewal or removed on disconnect |
 | Picker session/job metadata | `chrome.storage.session` | Browser session or job cleanup |
 | Explicit disconnected preference | `chrome.storage.local` | Until reconnect or uninstall |
 | Selected photo bytes | Browser memory | Active transfer only |

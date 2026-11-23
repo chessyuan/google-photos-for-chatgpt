@@ -15,7 +15,7 @@ const extensionPath = resolve(process.cwd(), 'dist')
 const expectedExtensionId = 'igacbcmbkglkglkindhcpmagafnboolj'
 const browserPath =
   process.env.GPFC_CHROME_PATH ||
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  chromium.executablePath()
 const userDataDirectory = await mkdtemp(join(tmpdir(), 'gpfc-smoke-'))
 const syntheticPngPath = join(userDataDirectory, 'synthetic.png')
 const smokeCounts = (process.env.GPFC_SMOKE_COUNTS || '1,3,5')
@@ -44,9 +44,9 @@ try {
     headless: false,
     ignoreDefaultArgs: ['--disable-extensions'],
     args: [
+      '--disable-features=AutofillAiWalletPrivatePasses',
       '--disable-extensions-except=' + extensionPath,
       '--load-extension=' + extensionPath,
-      '--disable-features=DisableLoadExtensionCommandLineSwitch',
       '--window-position=-32000,-32000',
       '--window-size=1200,900',
       '--no-first-run',

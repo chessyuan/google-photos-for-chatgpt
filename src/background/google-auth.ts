@@ -124,6 +124,21 @@ interface StoredWebAuthorization {
   grantedScopes: string[]
   expiresAt: number
   selectedAt: number
+  loginHint?: string
+}
+
+let webAuthorizationGeneration = 0
+let silentWebAuthorization: Promise<GoogleAuthorization> | undefined
+let webStorageQueue: Promise<void> = Promise.resolve()
+const accountHintLookups = new Map<string, Promise<void>>()
+const authorizationRenewalLeadMilliseconds = 5 * 60_000
+const authorizationRenewalRetryFloorMilliseconds = 30_000
+let renewalCooldown: { token: string; generation: number; retryAt: number } | undefined
+
+function withWebStorageLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = webStorageQueue.then(operation, operation)
+  webStorageQueue = result.then(() => undefined, () => undefined)
+  return result
 }
 
 interface RuntimeWebOAuthConfig {
@@ -200,16 +215,57 @@ async function getChromeProfileAccount(): Promise<
 async function readStoredWebAuthorization(): Promise<
   StoredWebAuthorization | undefined
 > {
-  const stored = await chrome.storage.session.get(WEB_OAUTH_STORAGE_KEY)
-  return stored[WEB_OAUTH_STORAGE_KEY] as StoredWebAuthorization | undefined
+  const generation = webAuthorizationGeneration
+  // Durable access tokens stay in trusted extension contexts, never content
+  // scripts. This also preserves a still-valid login across browser/reload.
+  await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })
+  const [session, local] = await Promise.all([
+    chrome.storage.session.get(WEB_OAUTH_STORAGE_KEY),
+    chrome.storage.local.get(WEB_OAUTH_STORAGE_KEY),
+  ])
+  const persisted = local[WEB_OAUTH_STORAGE_KEY] as StoredWebAuthorization | undefined
+  if (persisted) return persisted
+  const current = session[WEB_OAUTH_STORAGE_KEY] as StoredWebAuthorization | undefined
+  if (current?.token && current.expiresAt > Date.now() + 30_000) {
+    // Migrate a previously session-only login once, not on every API request.
+    normalizeWebAuthorization(current)
+    await writeStoredWebAuthorization(current, generation)
+  }
+  return current
+}
+
+async function writeStoredWebAuthorization(
+  stored: StoredWebAuthorization,
+  generation = webAuthorizationGeneration,
+  connect = false,
+): Promise<void> {
+  await withWebStorageLock(async () => {
+    if (generation !== webAuthorizationGeneration) {
+      throw new GoogleAuthError('required', publicMessage('required'))
+    }
+    await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })
+    await chrome.storage.local.set({ [WEB_OAUTH_STORAGE_KEY]: stored })
+    await chrome.storage.session.set({ [WEB_OAUTH_STORAGE_KEY]: stored })
+    if (generation !== webAuthorizationGeneration) {
+      throw new GoogleAuthError('required', publicMessage('required'))
+    }
+    if (connect && generation === webAuthorizationGeneration) {
+      await setExplicitDisconnect(false)
+    }
+  })
 }
 
 async function clearStoredWebAuthorization(token?: string): Promise<void> {
-  if (token) {
-    const current = await readStoredWebAuthorization()
-    if (current?.token !== token) return
-  }
-  await chrome.storage.session.remove(WEB_OAUTH_STORAGE_KEY)
+  await withWebStorageLock(async () => {
+    if (token) {
+      const local = await chrome.storage.local.get(WEB_OAUTH_STORAGE_KEY)
+      const session = await chrome.storage.session.get(WEB_OAUTH_STORAGE_KEY)
+      const current = (local[WEB_OAUTH_STORAGE_KEY] ?? session[WEB_OAUTH_STORAGE_KEY]) as StoredWebAuthorization | undefined
+      if (current?.token !== token) return
+    }
+    await chrome.storage.session.remove(WEB_OAUTH_STORAGE_KEY)
+    await chrome.storage.local.remove(WEB_OAUTH_STORAGE_KEY)
+  })
 }
 
 async function getStoredWebAuthorization(): Promise<GoogleAuthorization> {
@@ -217,7 +273,83 @@ async function getStoredWebAuthorization(): Promise<GoogleAuthorization> {
   if (!stored) {
     throw new GoogleAuthError('required', publicMessage('required'))
   }
-  return normalizeWebAuthorization(stored)
+  if (stored.token && stored.expiresAt > Date.now() + 30_000) {
+    const authorization = normalizeWebAuthorization(stored)
+    if (!stored.loginHint) void recoverAccountHint(stored)
+    return authorization
+  }
+  if (!stored.loginHint) {
+    throw new GoogleAuthError('expired', publicMessage('expired'))
+  }
+  return renewWebAuthorization(stored)
+}
+
+function recoverAccountHint(stored: StoredWebAuthorization): Promise<void> {
+  const existing = accountHintLookups.get(stored.token)
+  if (existing) return existing
+  const generation = webAuthorizationGeneration
+  const lookup = (async () => {
+    const loginHint = await readTokenAccountHint(stored.token)
+    if (!loginHint || generation !== webAuthorizationGeneration) return
+    const current = await readStoredWebAuthorization()
+    if (current?.token !== stored.token || current.loginHint) return
+    await writeStoredWebAuthorization({ ...current, loginHint }, generation)
+  })().catch(() => undefined).finally(() => { accountHintLookups.delete(stored.token) })
+  accountHintLookups.set(stored.token, lookup)
+  return lookup
+}
+
+function renewWebAuthorization(stored: StoredWebAuthorization): Promise<GoogleAuthorization> {
+  silentWebAuthorization ??= authorizeWithGoogleAccountChooser(false, stored)
+    .finally(() => { silentWebAuthorization = undefined })
+  return silentWebAuthorization
+}
+
+// Return the next useful renewal time. This never opens interactive UI, and a
+// failed early renewal must not throw away an access token that still works.
+export async function prepareGoogleAuthorization(): Promise<number | undefined> {
+  if (!isGoogleAccountChooserConfigured() || await explicitDisconnectRequested()) return undefined
+  let stored = await readStoredWebAuthorization()
+  if (!stored) return undefined
+  if (stored.token && stored.expiresAt > Date.now() + 30_000 && !stored.loginHint) {
+    await recoverAccountHint(stored)
+    stored = await readStoredWebAuthorization()
+    if (!stored || await explicitDisconnectRequested()) return undefined
+  }
+  const now = Date.now()
+  if (!stored.loginHint) {
+    return stored.token && stored.expiresAt > now + authorizationRenewalLeadMilliseconds + authorizationRenewalRetryFloorMilliseconds
+      ? stored.expiresAt - authorizationRenewalLeadMilliseconds
+      : undefined
+  }
+  if (stored.token && stored.expiresAt > now + authorizationRenewalLeadMilliseconds) {
+    return stored.expiresAt - authorizationRenewalLeadMilliseconds
+  }
+  if (stored.token && renewalCooldown?.token === stored.token &&
+    renewalCooldown.generation === webAuthorizationGeneration && renewalCooldown.retryAt > now) {
+    return renewalCooldown.retryAt
+  }
+  try {
+    await renewWebAuthorization(stored)
+    const renewed = await readStoredWebAuthorization()
+    if (!renewed || await explicitDisconnectRequested()) return undefined
+    const next = renewed.expiresAt - authorizationRenewalLeadMilliseconds
+    // Google may return the same short-lived token. Avoid an alarm retry loop.
+    const renewAt = next > Date.now() + authorizationRenewalRetryFloorMilliseconds
+      ? next
+      : Math.max(Date.now() + authorizationRenewalRetryFloorMilliseconds, renewed.expiresAt + 1000)
+    renewalCooldown = { token: renewed.token, generation: webAuthorizationGeneration, retryAt: renewAt }
+    return renewAt
+  } catch {
+    if (await explicitDisconnectRequested()) return undefined
+    const retryAt = stored.token && stored.expiresAt > Date.now()
+      ? Math.max(Date.now() + authorizationRenewalRetryFloorMilliseconds, stored.expiresAt + 1000)
+      : undefined
+    if (retryAt !== undefined) {
+      renewalCooldown = { token: stored.token, generation: webAuthorizationGeneration, retryAt }
+    }
+    return retryAt
+  }
 }
 
 function normalizeWebAuthorization(
@@ -251,7 +383,25 @@ function oauthResponseParameters(url: URL): URLSearchParams {
   return url.searchParams
 }
 
-async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization> {
+async function readTokenAccountHint(token: string): Promise<string | undefined> {
+  try {
+    const info = await fetch(
+      'https://oauth2.googleapis.com/tokeninfo?' + new URLSearchParams({ access_token: token }),
+      { signal: AbortSignal.timeout(3000), cache: 'no-store' },
+    )
+    if (!info.ok) return undefined
+    const identity = await info.json() as { sub?: string; user_id?: string; aud?: string; audience?: string }
+    if ((identity.aud ?? identity.audience) !== getWebOAuthClientId()) return undefined
+    return identity.sub ?? identity.user_id
+  } catch {
+    return undefined
+  }
+}
+
+async function authorizeWithGoogleAccountChooser(
+  interactive = true,
+  previous?: StoredWebAuthorization,
+): Promise<GoogleAuthorization> {
   const clientId = getWebOAuthClientId()
   if (!isGoogleAccountChooserConfigured()) {
     throw new GoogleAuthError(
@@ -262,13 +412,19 @@ async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization>
   }
 
   const redirectUri = chrome.identity.getRedirectURL()
+  const generation = interactive
+    ? ++webAuthorizationGeneration
+    : webAuthorizationGeneration
   const state = crypto.randomUUID()
   const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
   authorizationUrl.searchParams.set('client_id', clientId)
   authorizationUrl.searchParams.set('redirect_uri', redirectUri)
   authorizationUrl.searchParams.set('response_type', 'token')
   authorizationUrl.searchParams.set('scope', PICKER_SCOPE)
-  authorizationUrl.searchParams.set('prompt', 'select_account')
+  authorizationUrl.searchParams.set('prompt', interactive ? 'select_account' : 'none')
+  if (!interactive && previous?.loginHint) {
+    authorizationUrl.searchParams.set('login_hint', previous.loginHint)
+  }
   authorizationUrl.searchParams.set('include_granted_scopes', 'false')
   authorizationUrl.searchParams.set('state', state)
 
@@ -276,9 +432,16 @@ async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization>
   try {
     redirectedTo = await chrome.identity.launchWebAuthFlow({
       url: authorizationUrl.toString(),
-      interactive: true,
+      interactive,
+      ...(!interactive ? {
+        abortOnLoadForNonInteractive: false,
+        timeoutMsForNonInteractive: 5000,
+      } : {}),
     })
   } catch (error) {
+    if (!interactive) {
+      throw new GoogleAuthError('expired', publicMessage('expired'))
+    }
     throw asGoogleAuthError(error, true)
   }
   if (!redirectedTo) {
@@ -287,7 +450,7 @@ async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization>
 
   const resultUrl = new URL(redirectedTo)
   const redirectUrl = new URL(redirectUri)
-  if (resultUrl.origin !== redirectUrl.origin) {
+  if (resultUrl.origin !== redirectUrl.origin || resultUrl.pathname !== redirectUrl.pathname) {
     throw new GoogleAuthError(
       'failed',
       publicMessage('failed'),
@@ -304,7 +467,7 @@ async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization>
   }
   const oauthError = response.get('error')
   if (oauthError) {
-    const code = oauthError === 'access_denied' ? 'cancelled' : 'failed'
+    const code = !interactive ? 'expired' : oauthError === 'access_denied' ? 'cancelled' : 'failed'
     throw new GoogleAuthError(
       code,
       publicMessage(code),
@@ -325,14 +488,26 @@ async function authorizeWithGoogleAccountChooser(): Promise<GoogleAuthorization>
     )
   }
 
+  // No additional scopes are requested. Without a verified account binding,
+  // interactive authorization works but silent account selection is refused.
+  const loginHint = interactive ? undefined : await readTokenAccountHint(token)
+  if (!interactive && (!loginHint || loginHint !== previous?.loginHint)) {
+    throw new GoogleAuthError('expired', publicMessage('expired'))
+  }
   const stored: StoredWebAuthorization = {
     token,
     grantedScopes,
     expiresAt: Date.now() + expiresIn * 1000,
-    selectedAt: Date.now(),
+    selectedAt: previous?.selectedAt ?? Date.now(),
+    loginHint,
   }
   const authorization = normalizeWebAuthorization(stored)
-  await chrome.storage.session.set({ [WEB_OAUTH_STORAGE_KEY]: stored })
+  if (generation !== webAuthorizationGeneration ||
+    (!interactive && await explicitDisconnectRequested())) {
+    throw new GoogleAuthError('required', publicMessage('required'))
+  }
+  await writeStoredWebAuthorization(stored, generation, interactive)
+  if (interactive) void recoverAccountHint(stored)
   return authorization
 }
 
@@ -367,7 +542,6 @@ export async function getGoogleAuthorization(
       const authorization = interactive
         ? await authorizeWithGoogleAccountChooser()
         : await getStoredWebAuthorization()
-      await setExplicitDisconnect(false)
       return authorization
     } catch (error) {
       throw asGoogleAuthError(error, interactive)
@@ -384,7 +558,7 @@ export async function getGoogleAuthorization(
     if (account?.id) details.account = { id: account.id }
     const result = await chrome.identity.getAuthToken(details)
     const authorization = normalizeTokenResult(result, account)
-    await setExplicitDisconnect(false)
+    if (interactive) await setExplicitDisconnect(false)
     return authorization
   } catch (error) {
     throw asGoogleAuthError(error, interactive)
@@ -425,7 +599,15 @@ async function refreshAccessToken(
   staleToken: string,
   interactive: boolean,
 ): Promise<string> {
-  await clearAccessToken(staleToken)
+  if (isGoogleAccountChooserConfigured()) {
+    const generation = webAuthorizationGeneration
+    const stored = await readStoredWebAuthorization()
+    if (stored?.token === staleToken) {
+      await writeStoredWebAuthorization({ ...stored, token: '', expiresAt: 0 }, generation)
+    }
+  } else {
+    await clearAccessToken(staleToken)
+  }
   try {
     return await getAccessToken(false)
   } catch (error) {
@@ -443,7 +625,8 @@ async function refreshAccessToken(
 export async function connectGooglePhotos(force = false): Promise<void> {
   if (force) {
     if (isGoogleAccountChooserConfigured()) {
-      await clearStoredWebAuthorization()
+      // Keep the previous login if the user cancels choosing another account.
+      webAuthorizationGeneration += 1
     } else {
       await chrome.identity.clearAllCachedAuthTokens()
     }
@@ -453,6 +636,8 @@ export async function connectGooglePhotos(force = false): Promise<void> {
 }
 
 export async function disconnectGooglePhotos(): Promise<void> {
+  webAuthorizationGeneration += 1
+  await setExplicitDisconnect(true)
   if (isGoogleAccountChooserConfigured()) {
     const authorization = await readStoredWebAuthorization()
     await clearStoredWebAuthorization()

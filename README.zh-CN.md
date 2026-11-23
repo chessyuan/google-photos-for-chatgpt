@@ -1,6 +1,6 @@
 # Google Photos for ChatGPT
 
-Google Photos for ChatGPT 是一个本地优先的 Chrome / Chromium 扩展，让用户通过 Google Photos 官方选择器从 Google 相册选取云端照片，并直接添加到 ChatGPT 对话附件区。
+Google Photos for ChatGPT 是一个本地优先的 Chrome / Chromium 扩展，让用户通过 Google Photos 官方选择器从 Google 相册选取照片和已处理完成的视频，并直接添加到 ChatGPT 对话附件区。
 
 ```text
 ChatGPT → Google Photos 官方选择器 → 选择照片 → 完成
@@ -13,11 +13,11 @@ ChatGPT → Google Photos 官方选择器 → 选择照片 → 完成
 
 [English](README.md) · [OAuth、隐私与技术原理](docs/OAUTH_PRIVACY_AND_ARCHITECTURE.zh-CN.md) · [隐私政策](PRIVACY.zh-CN.md) · [安全政策](SECURITY.zh-CN.md)
 
-## v1.1.0 发布状态
+## v1.2.0 预发布版
 
-v1.1.0 代码已经实现一键 Google 授权，但仅凭 GitHub 源码无法验证维护者 Google Cloud OAuth 应用的 Audience、Publishing status 和 Verification status。**在项目所有者完成并提供 [Google OAuth 检查清单](docs/GOOGLE_OAUTH_VERIFICATION.md)中的控制台证据前，不得声称 v1.1.0 已经能让任意 Google 账号公开授权。**
+可以从 Google 相册选择照片和已处理完成的视频，交给 ChatGPT 的附件输入框。关闭选图窗口后可立即再选一批。输入框加宽时，相册图标会跟随实际的「＋」按钮。完整变更、下载和升级步骤见 [v1.2.0 发布说明](https://github.com/chessyuan/google-photos-for-chatgpt/releases/tag/v1.2.0)。
 
-这个门槛尚未确认时，GitHub 上最新正式版本仍为 v1.0.0。
+Google OAuth 公开验证仍待确认，部分账号可能需要加入测试用户。参见 [OAuth 验证清单](docs/GOOGLE_OAUTH_VERIFICATION.zh-CN.md)。
 
 ### 试用前的重要提示
 
@@ -35,7 +35,7 @@ Google 目前可能显示**“Google 尚未验证此应用”**、提示应用�
 6. 第一次使用时登录并授权自己的 Google 账号。
 7. 选择照片并点击“完成”。
 
-完成一次授权后，后续点击会复用当前浏览器会话内仍有效的 token 和预先创建的 standby Picker session。真正可见的 Google 相册页面只会在用户点击后打开。
+完成一次授权后，后续点击会复用该账号仍有效的短期访问令牌 和预先创建的 standby Picker session。真正可见的 Google 相册页面只会在用户点击后打开。
 
 ## 主要功能
 
@@ -104,11 +104,11 @@ Google 官方账号选择器（或明确的 Chrome 配置文件降级模式）
 → DELETE Picker session
 ```
 
-账号选择器构建使用 `chrome.identity.launchWebAuthFlow` 和 Google 的 `prompt=select_account`。短期 access token 只保存在 `chrome.storage.session` 浏览器会话内；扩展没有 refresh token 或 Client Secret。没有配置 Web OAuth Client 的开发构建才降级使用 `getAuthToken`，并把 token 明确绑定到界面显示的 Chrome 配置文件账号。
+账号选择器构建使用 `chrome.identity.launchWebAuthFlow` 和 Google 的 `prompt=select_account`。短期 token 保存在可信扩展存储中，可跨重启恢复；到期或 API 拒绝后只对已验证的同一账号尝试静默续期，需重新登录或同意授权时仍由用户操作。扩展没有 refresh token 或 Client Secret。没有配置 Web OAuth Client 的开发构建才降级使用 `getAuthToken`，并把 token 明确绑定到界面显示的 Chrome 配置文件账号。
 
 ## 隐私
 
-项目没有自建后端、分析或遥测。Google OAuth 由 Chrome 和 Google Identity 管理。OAuth token 不会展示给普通用户、写入仓库文件或发送到项目自建服务器。账号选择器模式下，短期 access token 只通过 `chrome.storage.session` 保存在当前浏览器会话中，并在断开连接或会话结束时清除。只有用户主动选择的照片会在浏览器内存中处理，并随后交给 ChatGPT。
+项目没有自建后端、分析或遥测。Google OAuth 由 Chrome 和 Google Identity 管理。OAuth token 不会展示给普通用户、写入仓库文件或发送到项目自建服务器。账号选择器模式下，短期 token 和账号标识保存在限制为 `TRUSTED_CONTEXTS` 的 `chrome.storage.local` 中，并有会话副本；断开连接时删除，Google 的有效期仍然有效。只有用户主动选择的照片会在浏览器内存中处理，并随后交给 ChatGPT。
 
 请阅读完整的 [中文隐私政策](PRIVACY.zh-CN.md)、[English Privacy Policy](PRIVACY.md) 或 [OAuth、隐私与技术原理](docs/OAUTH_PRIVACY_AND_ARCHITECTURE.zh-CN.md)。
 
@@ -118,13 +118,15 @@ Google 官方账号选择器（或明确的 Chrome 配置文件降级模式）
 |---|---|
 | `identity` | 通过 Chrome Identity 获取和刷新 Google OAuth token。 |
 | `identity.email` | 在账号选择器 Client 不可用时，显示并明确使用当前 Chrome 配置文件账号。 |
-| `storage` | 保存临时 Picker/job 状态、断开连接偏好，以及仅在账号选择器模式下保存于 `chrome.storage.session` 的短期 access token；不保存图片 bytes。 |
+| `storage` | 保存临时 Picker/job 状态、断开连接偏好，以及保存在可信扩展存储中的账号选择器授权；不保存图片 bytes。 |
 | `activeTab` | 让 Popup 操作用户当前选中的 ChatGPT 页面。 |
+| `scripting` | 扩展更新后向已经打开的 ChatGPT 页面重新挂载本地脚本，保留页面草稿。 |
 | `alarms` | 在 MV3 Service Worker 休眠期间处理 standby session 过期和刷新。 |
 | `https://chatgpt.com/*` | 注入快捷图标并把所选文件交给当前 ChatGPT 输入框。 |
 | `https://photospicker.googleapis.com/*` | 创建、轮询、读取和删除 Picker session。 |
 | `https://oauth2.googleapis.com/*` | 用户断开连接时撤销账号选择器模式的 access token。 |
 | `https://lh3.googleusercontent.com/*` | 只下载用户在 Picker 中主动选择的媒体。 |
+| `https://*.googlevideo.com/*` | 允许视频下载跳转到 Google 视频 CDN。 |
 
 ## 开发者文档
 
@@ -148,7 +150,8 @@ npm run verify:dist
 - ChatGPT 是持续更新的 SPA，没有稳定的第三方附件 DOM API，未来页面更新可能需要适配。
 - 文件格式、大小、多图数量和服务端上传行为由 ChatGPT 控制。
 - WEBP、HEIC、HEIF 会按原 MIME 交给 ChatGPT，但目标站可能拒绝当前不支持的格式。
-- 视频会被跳过，本项目只处理图片附件。
+- 支持 Google Photos 中已处理完成的视频，通过官方 `=dv` 入口获取视频字节并交给通用文件上传框；Google 可能转码，扩展会保持响应 MIME 与文件名一致。ChatGPT 是否接收仍取决于账号及上传方式。
+- 扩展的内存保护限制为：单张图片 20 MB、单个视频 100 MB、每批总计 200 MB。这是扩展自身的限制，不代表账号的上传额度。Google 相册尚未处理完成的视频会跳过并显示提示。
 
 更多信息见 [troubleshooting.md](troubleshooting.md)。
 

@@ -31,8 +31,8 @@ const manifest = JSON.parse(
 if (manifest.manifest_version !== 3) {
   throw new Error('dist/manifest.json is not Manifest V3.')
 }
-if (manifest.version !== '1.1.0') {
-  throw new Error('dist manifest is not version 1.1.0.')
+if (manifest.version !== '1.2.0') {
+  throw new Error('dist manifest is not version 1.2.0.')
 }
 if (
   manifest.default_locale !== 'en' ||
@@ -98,6 +98,9 @@ if (
   )
 ) {
   throw new Error('dist manifest unexpectedly references the old Library API.')
+}
+if (!manifest.host_permissions?.includes('https://*.googlevideo.com/*')) {
+  throw new Error('dist manifest is missing the video CDN permission required by media redirects.')
 }
 
 async function walk(directory) {

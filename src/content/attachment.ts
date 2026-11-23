@@ -1,4 +1,4 @@
-import { CHATGPT_IMAGE_LIMIT_BYTES } from '../shared/constants'
+import { mediaByteLimit } from '../shared/media'
 import {
   markPerformance,
   performancePoints,
@@ -14,6 +14,23 @@ interface AttemptResult {
 
 let cachedComposer: HTMLElement | null = null
 let cachedFileInputs: HTMLInputElement[] = []
+export const editorSelector =
+  'textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]'
+
+export function invalidateComposerRoot(): void {
+  cachedComposer = null
+}
+
+function isEditorAvailable(editor: HTMLElement): boolean {
+  if (editor.closest('[hidden], [aria-hidden="true"], [inert], [data-gpfc-root]')) {
+    return false
+  }
+  for (let node: HTMLElement | null = editor; node; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+  }
+  return true
+}
 
 function visibleRect(element: Element): DOMRect {
   return element.getBoundingClientRect()
@@ -21,14 +38,17 @@ function visibleRect(element: Element): DOMRect {
 
 function editorCandidates(): HTMLElement[] {
   return [
-    ...document.querySelectorAll<HTMLElement>(
-      'textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]',
-    ),
-  ].filter((element) => !element.closest('#gpfc-extension-ui'))
+    ...document.querySelectorAll<HTMLElement>(editorSelector),
+  ].filter(isEditorAvailable)
 }
 
 export function findComposerRoot(): HTMLElement | null {
-  if (cachedComposer?.isConnected) return cachedComposer
+  if (
+    cachedComposer?.isConnected &&
+    [...cachedComposer.querySelectorAll<HTMLElement>(editorSelector)].some(
+      isEditorAvailable,
+    )
+  ) return cachedComposer
   const editors = editorCandidates()
   const ranked = editors
     .map((editor) => {
@@ -36,11 +56,13 @@ export function findComposerRoot(): HTMLElement | null {
       const root = form ?? editor.parentElement ?? editor
       const rect = visibleRect(root)
       let score = 0
+      if (editor.id === 'prompt-textarea') score += 100
       if (form) score += 20
       if (editor === document.activeElement) score += 10
       if (rect.bottom > window.innerHeight * 0.55) score += 8
       if (rect.width > 300) score += 4
       if (rect.height > 0 && rect.width > 0) score += 2
+      if (rect.bottom <= 0 || rect.top >= window.innerHeight) score -= 40
       return { root, score, bottom: rect.bottom }
     })
     .sort((left, right) => right.score - left.score || right.bottom - left.bottom)
@@ -67,20 +89,32 @@ function scoreFileInput(
   return score
 }
 
+function inputAcceptsFiles(input: HTMLInputElement, files: File[]): boolean {
+  const accepted = input.accept.toLowerCase().split(',').map((part) => part.trim()).filter(Boolean)
+  if (accepted.length === 0) return true
+  return files.every((file) => accepted.some((type) =>
+    type === '*/*' ||
+    (type.startsWith('.') ? file.name.toLowerCase().endsWith(type) :
+      type.endsWith('/*') ? file.type.toLowerCase().startsWith(type.slice(0, -1)) : file.type.toLowerCase() === type),
+  ))
+}
+
 export function findFileInputs(files: File[]): HTMLInputElement[] {
   const composer = findComposerRoot()
-  if (
-    cachedFileInputs.length === 0 ||
-    cachedFileInputs.some((input) => !input.isConnected)
-  ) {
-    cachedFileInputs = [
-      ...document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
-    ]
-  }
+  // React can retain the old input while inserting a new composer or portal.
+  // Connectivity alone does not make the cached list current.
+  cachedFileInputs = [
+    ...document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
+  ]
   return cachedFileInputs
     .filter(
       (input) =>
-        !input.disabled && (files.length === 1 || Boolean(input.multiple)),
+        !input.disabled &&
+        !input.closest('[inert], [data-gpfc-root]') &&
+        !(input.form?.querySelector(editorSelector) && !isEditorAvailable(input.form)) &&
+        !input.closest('[hidden], [aria-hidden="true"]')?.querySelector(editorSelector) &&
+        inputAcceptsFiles(input, files) &&
+        (files.length === 1 || Boolean(input.multiple)),
     )
     .sort(
       (left, right) =>
@@ -112,13 +146,19 @@ function dataTransferFor(files: File[]): DataTransfer {
   return transfer
 }
 
-function meaningfulMutation(records: MutationRecord[]): boolean {
+const attachmentSelector = 'img, video, [data-testid*="attachment"]:not(input):not(button), [data-testid*="upload"]:not(input):not(button), [data-testid*="file"]:not(input):not(button), [role="progressbar"], a[download]'
+
+function meaningfulMutation(records: MutationRecord[], filenames: string[]): boolean {
   return records.some((record) => {
-    if (record.type === 'attributes') return true
-    return [...record.addedNodes, ...record.removedNodes].some((node) => {
+    if (record.type === 'attributes') {
+      return record.target instanceof Element && Boolean(record.target.closest(attachmentSelector))
+    }
+    return [...record.addedNodes].some((node) => {
       const element =
         node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
-      return !element?.closest('#gpfc-extension-ui')
+      if (element?.closest('#gpfc-extension-ui')) return false
+      return Boolean(element?.matches(attachmentSelector) || element?.querySelector(attachmentSelector)) ||
+        filenames.some((filename) => Boolean(filename && node.textContent?.includes(filename)))
     })
   })
 }
@@ -129,6 +169,7 @@ async function observeMutation(
   trace?: PerformanceTrace,
   timeoutMilliseconds = 2500,
   acceptedWithoutMutation?: () => boolean,
+  filenames: string[] = [],
 ): Promise<{ mutated: boolean; eventAccepted: boolean }> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -141,7 +182,7 @@ async function observeMutation(
       resolve({ mutated, eventAccepted })
     }
     const observer = new MutationObserver((records) => {
-      if (!meaningfulMutation(records)) return
+      if (!meaningfulMutation(records, filenames)) return
       markPerformance(trace, performancePoints.uploadProcessingDetected)
       markPerformance(trace, performancePoints.previewInserted, {
         note: 'inferred from a meaningful composer DOM mutation',
@@ -199,7 +240,7 @@ async function attachToInput(
     )
     markPerformance(trace, performancePoints.changeDispatched)
     return !inputAccepted || !changeAccepted
-  }, trace, timeoutMilliseconds, () => input.files?.length === 0)
+  }, trace, timeoutMilliseconds, () => input.files?.length === 0, files.map((file) => file.name))
 
   const consumed = input.files?.length === 0
   const accepted = observation.mutated || consumed || observation.eventAccepted
@@ -256,15 +297,15 @@ async function attachByDrop(
     const enter = createDragEvent('dragenter', transfer)
     const over = createDragEvent('dragover', transfer)
     const drop = createDragEvent('drop', transfer)
-    const enterResult = target.dispatchEvent(enter)
-    const overResult = target.dispatchEvent(over)
+    target.dispatchEvent(enter)
+    target.dispatchEvent(over)
     transfer.dropEffect = 'copy'
     const dropResult = target.dispatchEvent(drop)
     markPerformance(trace, performancePoints.changeDispatched, {
       note: 'synthetic drop dispatched',
     })
-    return !enterResult || !overResult || !dropResult || drop.defaultPrevented
-  }, trace)
+    return !dropResult || drop.defaultPrevented
+  }, trace, 2500, undefined, files.map((file) => file.name))
 
   return {
     accepted: observation.mutated || observation.eventAccepted,
@@ -280,8 +321,9 @@ async function attachByDrop(
 async function waitForFileInput(
   files: File[],
   timeoutMilliseconds: number,
+  tried: Set<HTMLInputElement>,
 ): Promise<HTMLInputElement | undefined> {
-  const immediate = findFileInputs(files)[0]
+  const immediate = findFileInputs(files).find((input) => !tried.has(input))
   if (immediate) return immediate
 
   return new Promise((resolve) => {
@@ -295,12 +337,11 @@ async function waitForFileInput(
     }
     const check = () => {
       refreshUploadTargets()
-      const input = findFileInputs(files)[0]
+      const input = findFileInputs(files).find((input) => !tried.has(input))
       if (input) finish(input)
     }
     const observer = new MutationObserver(check)
-    const composer = findComposerRoot()
-    observer.observe(composer?.parentElement ?? document.body, {
+    observer.observe(document.body, {
       subtree: true,
       childList: true,
     })
@@ -317,13 +358,13 @@ export async function attachFilesToChatGPT(
 ): Promise<AttachmentResult> {
   warmChatGPTUploadTargets()
   markPerformance(trace, performancePoints.uploadResolveStart)
-  const eligible = files.filter((file) => file.size <= CHATGPT_IMAGE_LIMIT_BYTES)
+  const eligible = files.filter((file) => file.size > 0 && file.size <= mediaByteLimit(file.type))
   if (eligible.length === 0) {
     return {
       attempted: 0,
       method: 'none',
       verified: false,
-      detail: 'No file is within ChatGPT’s documented 20 MB image limit.',
+      detail: 'No file is within the extension limits (images: 20 MB; videos: 100 MB).',
     }
   }
 
@@ -341,7 +382,7 @@ export async function attachFilesToChatGPT(
       eligible,
       trace,
       inputIndex === 0 ? 1200 : 350,
-    )
+    ).catch(() => ({ accepted: false, verified: false, detail: 'File input unavailable.' }))
     if (result.accepted) {
       return {
         attempted: eligible.length,
@@ -352,12 +393,13 @@ export async function attachFilesToChatGPT(
     }
   }
 
-  const dynamicInput = await waitForFileInput(eligible, 1800)
+  const dynamicInput = await waitForFileInput(eligible, 1800, tried)
   if (dynamicInput && !tried.has(dynamicInput)) {
     markPerformance(trace, performancePoints.uploadResolved, {
       note: 'dynamically inserted file input',
     })
     const result = await attachToInput(dynamicInput, eligible, trace)
+      .catch(() => ({ accepted: false, verified: false, detail: 'File input unavailable.' }))
     if (result.accepted) {
       return {
         attempted: eligible.length,

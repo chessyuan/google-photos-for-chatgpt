@@ -9,6 +9,18 @@ Google Photos for ChatGPT 的重要变化记录在此，版本号遵循语义化
 - Google OAuth production verification and unrestricted public-account availability remain pending.
 - Google OAuth 正式验证及面向所有普通账号的公开可用性仍待完成。
 
+## [1.2.0] - 2026-11-23 · Pre-release / 预发布
+
+- Select ready videos alongside photos. The extension follows Google video CDN redirects, preserves the returned file type, and explains permission or network failures.
+- Reopen the Picker while a previous window finishes closing. Pending selections are handed to the composer one at a time.
+- Recover the Photos button on open chats after extension reload and align it with the visible upload control on wide composers.
+- Reuse valid authorization across restarts and silently renew for the same verified account when Google permits it.
+
+- 支持照片和已处理完成的视频混选。下载跟随 Google 视频 CDN 跳转，按实际返回格式命名，并区分权限和网络错误。
+- 关闭选图窗口后可立即再打开。上一批和下一批的结果逐批交付给输入框。
+- 扩展重载后会尝试恢复已打开聊天页的入口。加宽输入框时，图标跟随可见的上传控件。
+- 浏览器重启后可复用仍有效的授权，并在 Google 允许时为同一已确认账号静默续期。
+
 ## [1.1.0] - release candidate
 
 - Added Google's official account chooser with explicit account switching.
@@ -30,6 +42,7 @@ Google Photos for ChatGPT 的重要变化记录在此，版本号遵循语义化
 - Initial open-source release with Google Photos Picker, ChatGPT attachment handoff, session lifecycle management, and installable `dist/`.
 - 首次开源发布，包含 Google Photos Picker、ChatGPT 附件导入、session 生命周期管理和可安装的 `dist/`。
 
-[Unreleased]: https://github.com/chessyuan/google-photos-for-chatgpt/compare/v1.0.0...HEAD
-[1.1.0]: https://github.com/chessyuan/google-photos-for-chatgpt/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/chessyuan/google-photos-for-chatgpt/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/chessyuan/google-photos-for-chatgpt/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/chessyuan/google-photos-for-chatgpt/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/chessyuan/google-photos-for-chatgpt/releases/tag/v1.0.0

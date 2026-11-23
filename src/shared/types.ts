@@ -180,6 +180,7 @@ export type RuntimeResponse =
   | {
       ok: true
       job?: PublicJob
+      readyJobs?: PublicJob[]
       jobId?: string
       extensionId?: string
       clientId?: string

@@ -25,15 +25,32 @@ interface PhaseTwoCommand {
 }
 
 const activeDownloads = new Set<string>()
+let attachmentQueue: Promise<void> = Promise.resolve()
 let lastTerminalToast = ''
 
-function sendRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
-  return chrome.runtime.sendMessage(request) as Promise<RuntimeResponse>
+async function sendRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
+  try {
+    return await chrome.runtime.sendMessage(request) as RuntimeResponse
+  } catch (error) {
+    if (/extension context invalidated/i.test(errorMessage(error))) {
+      throw new Error(message('extensionUpdatedReload'), { cause: error })
+    }
+    throw error
+  }
 }
 
 const ui = createQuickUi(() => {
   void startPicker()
-})
+}, warmPickerOnIntent)
+
+let lastIntentWarmAt = 0
+
+function warmPickerOnIntent(): void {
+  const now = Date.now()
+  if (now - lastIntentWarmAt < 5000) return
+  lastIntentWarmAt = now
+  void warmPicker()
+}
 
 async function warmPicker(): Promise<void> {
   try {
@@ -63,8 +80,11 @@ function displayJob(job: PublicJob, showTerminalToast = true): void {
           message('compatibilityWarnings', String(job.warnings.length))
         : ''
     ui.showToast(
-      message('photosAdded', String(job.selectedCount)) + warningSuffix,
-      'success',
+      message(
+        job.attachment?.verified ? 'photosAdded' : 'photosHandedOff',
+        String(job.attachment?.attempted ?? job.selectedCount),
+      ) + warningSuffix,
+      job.attachment?.verified ? 'success' : 'info',
     )
   } else {
     ui.showToast(job.message, 'error')
@@ -74,10 +94,22 @@ function displayJob(job: PublicJob, showTerminalToast = true): void {
 async function attachReadyJob(job: PublicJob): Promise<void> {
   if (activeDownloads.has(job.id)) return
   activeDownloads.add(job.id)
+  const operation = attachmentQueue.then(() => attachFilesForJob(job))
+  attachmentQueue = operation.catch(() => undefined)
+  try {
+    await operation
+  } finally {
+    activeDownloads.delete(job.id)
+  }
+}
+
+async function attachFilesForJob(job: PublicJob): Promise<void> {
   const trace = job.performanceTrace
     ? structuredClone(job.performanceTrace)
     : undefined
   let workingToastShown = false
+  let handoffStarted = false
+  let attachmentReported = false
   const workingToastTimer = window.setTimeout(() => {
     workingToastShown = true
     ui.showToast(message('addingPhotos'), 'info', 30_000)
@@ -102,12 +134,14 @@ async function attachReadyJob(job: PublicJob): Promise<void> {
       throw new Error(detail)
     }
 
+    handoffStarted = true
     const result = await attachFilesToChatGPT(downloaded.files, trace)
     markPerformance(trace, performancePoints.totalComplete)
     result.performanceEntries = trace?.entries
     window.clearTimeout(workingToastTimer)
     if (workingToastShown) ui.clearToast()
     printPerformanceReport(trace)
+    attachmentReported = true
     const response = await sendRequest({
       type: 'ATTACH_RESULT',
       jobId: job.id,
@@ -120,12 +154,14 @@ async function attachReadyJob(job: PublicJob): Promise<void> {
     window.clearTimeout(workingToastTimer)
     if (workingToastShown) ui.clearToast()
     ui.showToast(errorMessage(error), 'error')
-    window.setTimeout(() => {
-      void refreshJob(false)
-    }, 1200)
+    if (handoffStarted && !attachmentReported) {
+      await sendRequest({
+        type: 'ATTACH_RESULT', jobId: job.id,
+        result: { attempted: 0, method: 'none', verified: false, detail: errorMessage(error) },
+      }).catch(() => undefined)
+    }
   } finally {
     window.clearTimeout(workingToastTimer)
-    activeDownloads.delete(job.id)
   }
 }
 
@@ -207,6 +243,10 @@ chrome.runtime.onMessage.addListener(
     _sender,
     sendResponse: (response: { ok: boolean; detail?: string; error?: string }) => void,
   ) => {
+    if (message && typeof message === 'object' && (message as { type?: unknown }).type === 'GPFC_PING') {
+      sendResponse({ ok: true })
+      return false
+    }
     if (isJobStatusMessage(message)) {
       void handleJob(message.job)
       return false
@@ -226,9 +266,11 @@ chrome.runtime.onMessage.addListener(
 async function refreshJob(showTerminalToast = false): Promise<void> {
   try {
     const response = await sendRequest({ type: 'GET_JOB' })
-    if (response.ok && response.job) {
-      displayJob(response.job, showTerminalToast)
-      if (response.job.status === 'ready') await attachReadyJob(response.job)
+    if (response.ok) {
+      if (response.job) displayJob(response.job, showTerminalToast)
+      const readyJobs = response.readyJobs ??
+        (response.job?.status === 'ready' ? [response.job] : [])
+      await Promise.all(readyJobs.map((job) => attachReadyJob(job)))
     }
   } catch {
     // The quick button remains available even when no old job can be restored.
@@ -238,3 +280,17 @@ async function refreshJob(showTerminalToast = false): Promise<void> {
 void refreshJob()
 warmChatGPTUploadTargets()
 void warmPicker()
+
+window.addEventListener('online', () => {
+  lastIntentWarmAt = 0
+  void warmPicker()
+})
+
+// A tab can outlive the worker, standby session, or access token. Prepare again
+// on return, silently, rather than making the next click pay for that recovery.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return
+  warmChatGPTUploadTargets()
+  void warmPicker()
+  void refreshJob()
+})

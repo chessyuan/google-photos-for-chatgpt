@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "minimum_chrome_version": "120",
@@ -10,6 +10,7 @@
     "identity",
     "identity.email",
     "storage",
+    "scripting",
     "activeTab",
     "alarms"
   ],
@@ -17,7 +18,8 @@
     "https://chatgpt.com/*",
     "https://photospicker.googleapis.com/*",
     "https://oauth2.googleapis.com/*",
-    "https://lh3.googleusercontent.com/*"
+    "https://lh3.googleusercontent.com/*",
+    "https://*.googlevideo.com/*"
   ],
   "oauth2": {
     "client_id": "43154637059-a8t1kbv88cv9kj51edigsluh0gkbvn2m.apps.googleusercontent.com",
@@ -42,7 +44,7 @@
       "js": [
         "content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_end"
     }
   ],
   "content_security_policy": {

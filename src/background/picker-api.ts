@@ -1,6 +1,7 @@
 import { PICKER_API_ROOT } from '../shared/constants'
 import { ApiError, UserFacingError } from '../shared/errors'
 import { message } from '../shared/i18n'
+import { withRequestDeadline } from './request-deadline'
 import type {
   MediaItemsResponse,
   PickedMediaItem,
@@ -48,38 +49,25 @@ export class PickerApi {
       DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
   ) {}
 
-  private async requestWithTimeout(
+  private async requestWithTimeout<T>(
     url: string,
-    init: RequestInit = {},
-    interactive = false,
-  ): Promise<Response> {
-    const controller = new AbortController()
-    const callerSignal = init.signal
-    const abortFromCaller = () => controller.abort(callerSignal?.reason)
-    if (callerSignal?.aborted) abortFromCaller()
-    else callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
-
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    const timedOut = new Promise<Response>((_, reject) => {
-      timeout = setTimeout(() => {
-        controller.abort()
-        reject(new UserFacingError(message('googlePhotosRequestTimedOut')))
-      }, this.requestTimeoutMilliseconds)
-    })
-
-    try {
-      return await Promise.race([
-        this.request(
+    init: RequestInit,
+    interactive: boolean,
+    consume: (response: Response) => Promise<T>,
+  ): Promise<T> {
+    return withRequestDeadline(
+      async (signal) => {
+        const response = await this.request(
           url,
-          { ...init, signal: controller.signal },
+          { ...init, signal },
           interactive,
-        ),
-        timedOut,
-      ])
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout)
-      callerSignal?.removeEventListener('abort', abortFromCaller)
-    }
+        )
+        return consume(response)
+      },
+      this.requestTimeoutMilliseconds,
+      new UserFacingError(message('googlePhotosRequestTimedOut')),
+      init.signal,
+    )
   }
 
   private async json<T>(
@@ -87,9 +75,10 @@ export class PickerApi {
     init?: RequestInit,
     interactive = false,
   ): Promise<T> {
-    const response = await this.requestWithTimeout(url, init, interactive)
-    if (!response.ok) throw await readError(response)
-    return (await response.json()) as T
+    return this.requestWithTimeout(url, init ?? {}, interactive, async (response) => {
+      if (!response.ok) throw await readError(response)
+      return (await response.json()) as T
+    })
   }
 
   async createSession(
@@ -118,13 +107,16 @@ export class PickerApi {
 
   async deleteSession(sessionId: string): Promise<void> {
     if (!sessionId) return
-    const response = await this.requestWithTimeout(
+    await this.requestWithTimeout(
       PICKER_API_ROOT + '/sessions/' + encodeURIComponent(sessionId),
       { method: 'DELETE' },
+      false,
+      async (response) => {
+        if (!response.ok && response.status !== 404) {
+          throw await readError(response)
+        }
+      },
     )
-    if (!response.ok && response.status !== 404) {
-      throw await readError(response)
-    }
   }
 
   async listAllMediaItems(sessionId: string): Promise<PickedMediaItem[]> {

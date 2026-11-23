@@ -51,7 +51,7 @@ https://igacbcmbkglkglkindhcpmagafnboolj.chromiumapp.org/
 ```text
 用户点击 Google Photos 按钮
 → Google 官方账号选择与 OAuth consent
-→ 短期 access token 进入 chrome.storage.session
+→ 短期 access token 进入可信扩展存储
 → POST photospicker.googleapis.com/v1/sessions
 → 打开 Google Photos 官方 Picker
 → 用户主动选择媒体并点击“完成”
@@ -67,7 +67,7 @@ https://igacbcmbkglkglkindhcpmagafnboolj.chromiumapp.org/
 ## 哪些信息保留在本地
 
 - Picker 任务状态、过期时间、轮询配置、窗口和标签 ID 只作为临时浏览器会话数据使用。
-- 账号选择器模式的 access token 只保存在 `chrome.storage.session`，断开连接或浏览器会话结束后清除。
+- 账号选择器授权保存在限制为 `TRUSTED_CONTEXTS` 的 `chrome.storage.local` 中，并有会话副本，可跨浏览器重启恢复。它保留 Google 的有效期，断开连接时删除。已验证的账号标识用于限时静默续期，返回的 token 必须属于同一账号。
 - 所选照片 bytes 只以浏览器内存中的 `Blob` 和 `File` 对象短暂存在。
 - 扩展不会主动把照片写入 Windows Downloads。
 - 项目没有分析、遥测、广告 SDK 或远程可执行代码。
@@ -85,13 +85,13 @@ https://igacbcmbkglkglkindhcpmagafnboolj.chromiumapp.org/
 ## OAuth 与 Picker 生命周期
 
 1. 真正的账号选择只会在用户主动点击后开始。
-2. 扩展校验 OAuth `state` 和固定回调 origin。
+2. 扩展校验 OAuth `state`、固定回调 origin 和路径。
 3. Token 必须包含唯一需要的 Picker scope。
 4. 只有真实的 Picker `sessions.create` 成功后才显示“已连接”。
 5. 授权后可以创建 standby session，让下一次 Picker 更快打开。
 6. Standby session 只能原子消费一次，并使用 Google 返回的 `expireTime` 判断是否过期。
 7. 切换账号或断开连接会关闭旧 Picker 并删除过时 session。
-8. API 返回 `401` 时会清除被拒绝的 token；扩展不保存 refresh token。
+8. API 返回 `401` 时会使被拒绝的 token 失效并尝试一次续期。账号选择器续期不弹出界面，并绑定到已验证的同一账号。扩展不保存 refresh token。
 
 ## ChatGPT 附件注入原理
 
@@ -108,7 +108,7 @@ ChatGPT 是持续变化的第三方 SPA，未来 UI 更新仍可能需要适配�
 
 | 数据 | 保存位置 | 保留时间 |
 |---|---|---|
-| 账号选择器短期 access token | `chrome.storage.session` | 当前浏览器会话、断开连接或 token 被拒绝前 |
+| 账号选择器短期 token 和账号标识 | 可信 `chrome.storage.local`，会话副本 | API 访问遵守 Google 有效期；续期时替换或断开时删除 |
 | Picker session / job 元数据 | `chrome.storage.session` | 当前浏览器会话或任务清理前 |
 | 用户主动断开连接偏好 | `chrome.storage.local` | 重新连接或卸载前 |
 | 所选照片 bytes | 浏览器内存 | 仅当前传输期间 |

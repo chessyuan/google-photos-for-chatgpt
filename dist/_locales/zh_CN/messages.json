@@ -27,7 +27,7 @@
   "ready": { "message": "可以使用" },
   "error": { "message": "错误" },
   "selectFromGooglePhotos": { "message": "从 Google 相册选择" },
-  "maximumPhotos": { "message": "最多选择照片数" },
+  "maximumPhotos": { "message": "最多选择媒体数" },
   "openChatGptFirst": { "message": "请先在当前标签页打开 ChatGPT。" },
   "developmentBuildNotConfigured": { "message": "此开发构建尚未配置 Google 相册，请查看开发者文档。" },
   "developerTests": { "message": "开发者测试" },
@@ -48,7 +48,11 @@
   "pickerOpeningFailed": { "message": "无法打开 Google 相册，请重试。" },
   "pickerOpeningInterrupted": { "message": "上次打开 Google 相册的流程已中断，请再次点击 Google Photos 重试。" },
   "browserAuthorizationUnsupported": { "message": "此浏览器不支持扩展使用 Chrome Google 授权。请改用 Google Chrome，或等待兼容 Edge 的 OAuth 构建。" },
-  "addingPhotos": { "message": "正在添加照片…" },
-  "photosAdded": { "message": "已向 ChatGPT 添加 $1 张照片。" },
+  "addingPhotos": { "message": "正在添加图片或视频…" },
+  "photosAdded": { "message": "已向 ChatGPT 添加 $1 个媒体文件。" },
+  "photosHandedOff": { "message": "已向 ChatGPT 交付 $1 个媒体文件，请确认附件区。" },
+  "extensionUpdatedReload": { "message": "扩展已更新。请先保留未发送的文字，再刷新当前 ChatGPT 页面后重试。" },
+  "videoDownloadPermissionMissing": { "message": "视频下载权限尚未生效。请重新加载扩展；若 Chrome 提示新增视频域名权限，请确认允许。（VIDEO_PERMISSION_MISSING）" },
+  "videoDownloadNetworkFailed": { "message": "Google 视频下载连接失败，请检查当前网络能否访问 googlevideo.com 后重试。（VIDEO_NETWORK_ERROR）" },
   "compatibilityWarnings": { "message": "扩展弹窗中有 $1 条兼容性提示。" }
 }

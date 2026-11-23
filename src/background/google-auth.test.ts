@@ -5,8 +5,10 @@ import {
   createAuthorizedFetchSession,
   disconnectGooglePhotos,
   getAccessTokenForUserAction,
+  getGoogleAuthorization,
   getGoogleAuthState,
   GoogleAuthError,
+  prepareGoogleAuthorization,
 } from './google-auth'
 import {
   AUTH_DISCONNECTED_STORAGE_KEY,
@@ -35,6 +37,7 @@ describe('Google authorization state', () => {
     getAuthToken = vi.fn()
     removeCachedAuthToken = vi.fn().mockResolvedValue(undefined)
     clearAllCachedAuthTokens = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Unexpected network request in unit test')))
     vi.stubGlobal('chrome', {
       runtime: {
         getManifest: () => ({ oauth2: { client_id: clientId } }),
@@ -49,6 +52,7 @@ describe('Google authorization state', () => {
       },
       storage: {
         local: {
+          setAccessLevel: vi.fn().mockResolvedValue(undefined),
           get: vi.fn(async (key: string) => ({ [key]: localStorage[key] })),
           set: vi.fn(async (value: Record<string, unknown>) => {
             Object.assign(localStorage, value)
@@ -172,6 +176,248 @@ describe('Google authorization state', () => {
       accountSelection: 'google-chooser',
     })
     expect(getAuthToken).not.toHaveBeenCalled()
+  })
+
+  function chooserLogin(overrides: Record<string, unknown> = {}) {
+    vi.stubGlobal('__GPFC_GOOGLE_WEB_CLIENT_ID__', 'test-chooser.apps.googleusercontent.com')
+    chrome.identity.getRedirectURL = vi.fn().mockReturnValue('https://test.chromiumapp.org/')
+    chrome.identity.launchWebAuthFlow = vi.fn(async ({ url }: chrome.identity.WebAuthFlowDetails) => {
+      const state = new URL(url).searchParams.get('state') ?? ''
+      return 'https://test.chromiumapp.org/#' + new URLSearchParams({
+        access_token: 'renewed-token', expires_in: '3600', scope: PICKER_SCOPE, state,
+      })
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      aud: 'test-chooser.apps.googleusercontent.com', sub: 'account-original',
+    }), { status: 200 })))
+    const stored = {
+      token: 'saved-token', grantedScopes: [PICKER_SCOPE],
+      expiresAt: Date.now() + 3600_000, selectedAt: 12345,
+      loginHint: 'account-original', ...overrides,
+    }
+    localStorage[WEB_OAUTH_STORAGE_KEY] = stored
+    return stored
+  }
+
+  it('restores a still-valid chooser login after session storage is cleared', async () => {
+    chooserLogin()
+    await expect(getGoogleAuthorization(false)).resolves.toMatchObject({
+      token: 'saved-token', accountKey: 'chooser:12345',
+    })
+    expect(chrome.storage.local.setAccessLevel).toHaveBeenCalledWith({ accessLevel: 'TRUSTED_CONTEXTS' })
+    expect(chrome.identity.launchWebAuthFlow).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('migrates a valid legacy session token without asking for another login', async () => {
+    const stored = chooserLogin()
+    delete localStorage[WEB_OAUTH_STORAGE_KEY]
+    sessionStorage[WEB_OAUTH_STORAGE_KEY] = stored
+    await expect(getGoogleAuthorization(false)).resolves.toMatchObject({ token: 'saved-token' })
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toEqual(stored)
+    expect(chrome.identity.launchWebAuthFlow).not.toHaveBeenCalled()
+  })
+
+  it('learns the account binding for a valid legacy token without opening login UI', async () => {
+    const stored = chooserLogin({ loginHint: undefined })
+    delete localStorage[WEB_OAUTH_STORAGE_KEY]
+    sessionStorage[WEB_OAUTH_STORAGE_KEY] = stored
+    await expect(getGoogleAuthorization(false)).resolves.toMatchObject({ token: 'saved-token' })
+    await vi.waitFor(() => expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({
+      token: 'saved-token', loginHint: 'account-original', selectedAt: 12345,
+    }))
+    expect(chrome.identity.launchWebAuthFlow).not.toHaveBeenCalled()
+  })
+
+  it('renews an expired login once for concurrent requests and preserves the account key', async () => {
+    chooserLogin({ expiresAt: 0 })
+    const results = await Promise.all([
+      getGoogleAuthorization(false), getGoogleAuthorization(false), getGoogleAuthorization(false),
+    ])
+    expect(results.map((result) => result.token)).toEqual(['renewed-token', 'renewed-token', 'renewed-token'])
+    expect(results.every((result) => result.accountKey === 'chooser:12345')).toBe(true)
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+    const details = vi.mocked(chrome.identity.launchWebAuthFlow).mock.calls[0]![0]
+    expect(details).toMatchObject({ interactive: false, abortOnLoadForNonInteractive: false, timeoutMsForNonInteractive: 5000 })
+    const url = new URL(details.url)
+    expect(url.searchParams.get('prompt')).toBe('none')
+    expect(url.searchParams.get('login_hint')).toBe('account-original')
+    expect(url.searchParams.get('scope')).toBe(PICKER_SCOPE)
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({ token: 'renewed-token', selectedAt: 12345 })
+  })
+
+  it('renews the same account silently before the access token expires', async () => {
+    chooserLogin({ expiresAt: Date.now() + 2 * 60_000 })
+    const [next, other] = await Promise.all([
+      prepareGoogleAuthorization(), prepareGoogleAuthorization(),
+    ])
+    expect(next).toBeGreaterThan(Date.now() + 50 * 60_000)
+    expect(other).toBeGreaterThan(Date.now() + 50 * 60_000)
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(chrome.identity.launchWebAuthFlow).mock.calls[0]![0].interactive).toBe(false)
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({
+      token: 'renewed-token', loginHint: 'account-original', selectedAt: 12345,
+    })
+  })
+
+  it('keeps a working token when early silent renewal is unavailable', async () => {
+    const expiresAt = Date.now() + 2 * 60_000
+    const original = chooserLogin({ token: 'failure-token', expiresAt })
+    vi.mocked(chrome.identity.launchWebAuthFlow).mockRejectedValue(new Error('interaction required'))
+    const next = await prepareGoogleAuthorization()
+    expect(next).toBeGreaterThan(expiresAt)
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toEqual(original)
+    await expect(getGoogleAuthorization(false)).resolves.toMatchObject({ token: 'failure-token' })
+    await prepareGoogleAuthorization()
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not switch accounts during proactive renewal', async () => {
+    const original = chooserLogin({ token: 'mismatch-token', expiresAt: Date.now() + 2 * 60_000 })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      aud: 'test-chooser.apps.googleusercontent.com', sub: 'account-other',
+    }), { status: 200 })))
+    await prepareGoogleAuthorization()
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toEqual(original)
+    await expect(getGoogleAuthorization(false)).resolves.toMatchObject({ token: 'mismatch-token' })
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not immediately retry if Google returns a token with little lifetime left', async () => {
+    chooserLogin({ token: 'short-start-token', expiresAt: Date.now() + 2 * 60_000 })
+    chrome.identity.launchWebAuthFlow = vi.fn(async ({ url }: chrome.identity.WebAuthFlowDetails) =>
+      'https://test.chromiumapp.org/#' + new URLSearchParams({
+        access_token: 'short-token', expires_in: '90', scope: PICKER_SCOPE,
+        state: new URL(url).searchParams.get('state') ?? '',
+      }),
+    )
+    const next = await prepareGoogleAuthorization()
+    expect(next).toBeGreaterThanOrEqual(Date.now() + 90_000)
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not use background maintenance to reconnect an explicitly disconnected account', async () => {
+    chooserLogin({ expiresAt: 0 })
+    localStorage[AUTH_DISCONNECTED_STORAGE_KEY] = true
+    await expect(prepareGoogleAuthorization()).resolves.toBeUndefined()
+    expect(chrome.identity.launchWebAuthFlow).not.toHaveBeenCalled()
+  })
+
+  it('does not delay the first authorized action while the account hint is being checked', async () => {
+    chooserLogin()
+    delete localStorage[WEB_OAUTH_STORAGE_KEY]
+    let finishLookup!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { finishLookup = resolve })))
+    await expect(connectGooglePhotos(true)).resolves.toBeUndefined()
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({ token: 'renewed-token' })
+    finishLookup(new Response(JSON.stringify({
+      aud: 'test-chooser.apps.googleusercontent.com', sub: 'account-original',
+    }), { status: 200 }))
+    await vi.waitFor(() => expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({
+      loginHint: 'account-original',
+    }))
+  })
+
+  it('does not silently switch to a different Google account', async () => {
+    const original = chooserLogin({ expiresAt: 0 })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      aud: 'test-chooser.apps.googleusercontent.com', sub: 'account-other',
+    }), { status: 200 })))
+    await expect(getGoogleAuthorization(false)).rejects.toMatchObject({ code: 'expired' })
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toEqual(original)
+  })
+
+  it('does not renew without a verified account binding', async () => {
+    chooserLogin({ expiresAt: 0, loginHint: undefined })
+    await expect(getGoogleAuthorization(false)).rejects.toMatchObject({ code: 'expired' })
+    expect(chrome.identity.launchWebAuthFlow).not.toHaveBeenCalled()
+  })
+
+  it('preserves the current account when choosing another account is cancelled', async () => {
+    const original = chooserLogin()
+    vi.mocked(chrome.identity.launchWebAuthFlow).mockRejectedValue(new Error('The user did not approve access'))
+    await expect(connectGooglePhotos(true)).rejects.toMatchObject({ code: 'cancelled' })
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toEqual(original)
+    await expect(getGoogleAuthorization(false)).resolves.toMatchObject({ token: 'saved-token' })
+  })
+
+  it('removes durable and session authorization on explicit disconnect', async () => {
+    const original = chooserLogin()
+    sessionStorage[WEB_OAUTH_STORAGE_KEY] = original
+    await disconnectGooglePhotos()
+    expect(localStorage).toEqual({ [AUTH_DISCONNECTED_STORAGE_KEY]: true })
+    expect(sessionStorage[WEB_OAUTH_STORAGE_KEY]).toBeUndefined()
+    await expect(getGoogleAuthorization(false)).rejects.toMatchObject({ code: 'required' })
+    expect(chrome.identity.launchWebAuthFlow).not.toHaveBeenCalled()
+  })
+
+  it('cannot restore authorization after the user disconnects during renewal', async () => {
+    chooserLogin({ expiresAt: 0 })
+    let finishFlow: (() => void) | undefined
+    const flowStarted = new Promise<void>((resolve) => {
+      chrome.identity.launchWebAuthFlow = vi.fn(({ url }: chrome.identity.WebAuthFlowDetails) => {
+        resolve()
+        return new Promise<string>((finish) => {
+          finishFlow = () => finish('https://test.chromiumapp.org/#' + new URLSearchParams({
+            access_token: 'renewed-token', expires_in: '3600', scope: PICKER_SCOPE,
+            state: new URL(url).searchParams.get('state') ?? '',
+          }))
+        })
+      })
+    })
+    const result = getGoogleAuthorization(false).catch((error: unknown) => error)
+    await flowStarted
+    await disconnectGooglePhotos()
+    finishFlow?.()
+    await expect(result).resolves.toMatchObject({ code: 'required' })
+    expect(localStorage).toEqual({ [AUTH_DISCONNECTED_STORAGE_KEY]: true })
+    expect(sessionStorage[WEB_OAUTH_STORAGE_KEY]).toBeUndefined()
+  })
+
+  it('rejects an OAuth redirect with the wrong path before saving a token', async () => {
+    const original = chooserLogin()
+    chrome.identity.launchWebAuthFlow = vi.fn().mockResolvedValue('https://test.chromiumapp.org/unexpected#access_token=bad')
+    await expect(connectGooglePhotos(true)).rejects.toMatchObject({ code: 'failed' })
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toEqual(original)
+  })
+
+  it('renews a rejected chooser token after 401 without losing its account binding', async () => {
+    chooserLogin()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        aud: 'test-chooser.apps.googleusercontent.com', sub: 'account-original',
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(authorizedFetch('https://example.test')).resolves.toMatchObject({ status: 200 })
+    expect(localStorage[WEB_OAUTH_STORAGE_KEY]).toMatchObject({
+      token: 'renewed-token', loginHint: 'account-original', selectedAt: 12345,
+    })
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get('Authorization')).toBe('Bearer renewed-token')
+    expect(chrome.identity.launchWebAuthFlow).toHaveBeenCalledTimes(1)
+  })
+
+  it('serializes disconnect with a renewal whose storage write is still pending', async () => {
+    chooserLogin({ expiresAt: 0 })
+    let finishWrite: (() => void) | undefined
+    let startedWrite: (() => void) | undefined
+    const started = new Promise<void>((resolve) => { startedWrite = resolve })
+    vi.mocked(chrome.storage.local.set).mockImplementation(async (values: Record<string, unknown>) => {
+      Object.assign(localStorage, values)
+      if ((values[WEB_OAUTH_STORAGE_KEY] as { token?: string } | undefined)?.token === 'renewed-token') {
+        startedWrite?.()
+        await new Promise<void>((resolve) => { finishWrite = resolve })
+      }
+    })
+    const renewing = getGoogleAuthorization(false).catch((error: unknown) => error)
+    await started
+    const disconnecting = disconnectGooglePhotos()
+    finishWrite?.()
+    await disconnecting
+    await expect(renewing).resolves.toMatchObject({ code: 'required' })
+    expect(localStorage).toEqual({ [AUTH_DISCONNECTED_STORAGE_KEY]: true })
+    expect(sessionStorage[WEB_OAUTH_STORAGE_KEY]).toBeUndefined()
   })
 
   it('reports checking instead of a false connected state for a token alone', async () => {

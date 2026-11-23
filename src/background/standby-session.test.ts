@@ -34,6 +34,7 @@ describe('standby Picker session storage', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -180,5 +181,34 @@ describe('standby Picker session storage', () => {
     await expect(consuming).resolves.toMatchObject({
       standby: { sessionId: 'session-prewarming', used: true },
     })
+  })
+
+  it('bounds the click delay when background prewarming never finishes', async () => {
+    vi.useFakeTimers()
+    const consuming = consumeStandbyAfterCreation(50, new Promise(() => undefined))
+    await vi.advanceTimersByTimeAsync(250)
+    await expect(consuming).resolves.toMatchObject({ missReason: 'no session' })
+  })
+
+  it('falls back normally when speculative creation fails', async () => {
+    await expect(consumeStandbyAfterCreation(50, Promise.reject(new Error('offline'))))
+      .resolves.toMatchObject({ missReason: 'no session' })
+  })
+
+  it('does not consume a session that expired during the prewarm wait', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'))
+    let finish: (() => void) | undefined
+    const creating = new Promise<void>((resolve) => { finish = resolve })
+    const consuming = consumeStandbyAfterCreation(50, creating)
+    await vi.advanceTimersByTimeAsync(100)
+    stored = {
+      sessionId: 'expired-while-waiting', pickerUri: 'https://photos.google.com/picker/expired',
+      expireTime: '2030-01-01T00:00:00.050Z', createdAt: Date.now(),
+      used: false, maxItemCount: 50, ready: false,
+    }
+    finish?.()
+    await expect(consuming).resolves.toMatchObject({ missReason: 'expired' })
+    expect(stored.used).toBe(false)
   })
 })

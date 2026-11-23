@@ -8,6 +8,7 @@ export const DOWNLOAD_CONCURRENCY = 3
 export const JOB_STORAGE_KEY = 'gpfcJobs'
 export const STANDBY_SESSION_STORAGE_KEY = 'gpfcStandbyPickerSession'
 export const STANDBY_SESSION_ALARM = 'gpfcStandbyPickerSessionExpiry'
+export const AUTH_RENEWAL_ALARM = 'gpfcGoogleAuthorizationRenewal'
 export const AUTH_DISCONNECTED_STORAGE_KEY = 'gpfcGoogleAuthDisconnected'
 export const WEB_OAUTH_STORAGE_KEY = 'gpfcGoogleWebOAuth'
 export const GOOGLE_PHOTOS_READINESS_STORAGE_KEY =

@@ -6,7 +6,45 @@ import {
   supportsBinaryMessaging,
 } from './download-client'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+function fakeConnection(messages: DownloadPortMessage[]) {
+  let listener: (message: DownloadPortMessage) => void = () => undefined
+  const disconnect = vi.fn()
+  vi.stubGlobal('chrome', { runtime: { connect: () => ({
+    onMessage: { addListener: (callback: typeof listener) => { listener = callback } },
+    onDisconnect: { addListener() {} },
+    disconnect,
+    postMessage: () => queueMicrotask(() => messages.forEach((message) => listener(message))),
+  }) } })
+  return disconnect
+}
+
+describe('download protocol failures', () => {
+  const metadata: DownloadPortMessage = {
+    type: 'FILE_START', index: 0, filename: 'photo.png', mimeType: 'image/png', lastModified: 1,
+  }
+  it('rejects truncated bytes instead of uploading a corrupt file', async () => {
+    fakeConnection([metadata, { type: 'FILE_CHUNK', index: 0, base64: btoa('a') }, { type: 'FILE_END', index: 0, size: 2 }])
+    await expect(downloadJobFiles('job')).rejects.toThrow('incomplete')
+  })
+
+  it('rejects completion when a promised file never arrived', async () => {
+    fakeConnection([{ type: 'ALL_DONE', downloaded: 1, skipped: [] }])
+    await expect(downloadJobFiles('job')).rejects.toThrow('before all files arrived')
+  })
+
+  it('times out a silent background connection and releases the port', async () => {
+    vi.useFakeTimers()
+    const disconnect = fakeConnection([])
+    const operation = downloadJobFiles('job')
+    const rejected = expect(operation).rejects.toThrow('stopped responding')
+    await vi.advanceTimersByTimeAsync(90_000)
+    await rejected
+    expect(disconnect).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
 
 describe('supportsBinaryMessaging', () => {
   it('keeps compatibility messaging enabled on current Chrome and Edge', () => {

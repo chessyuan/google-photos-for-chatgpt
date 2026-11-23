@@ -27,7 +27,7 @@
   "ready": { "message": "Ready" },
   "error": { "message": "Error" },
   "selectFromGooglePhotos": { "message": "Select from Google Photos" },
-  "maximumPhotos": { "message": "Maximum photos" },
+  "maximumPhotos": { "message": "Maximum media items" },
   "openChatGptFirst": { "message": "Open ChatGPT in the active tab first." },
   "developmentBuildNotConfigured": { "message": "This development build is not configured for Google Photos. See the developer documentation." },
   "developerTests": { "message": "Developer tests" },
@@ -48,7 +48,11 @@
   "pickerOpeningFailed": { "message": "Google Photos could not be opened. Please try again." },
   "pickerOpeningInterrupted": { "message": "The previous Picker start was interrupted. Click Google Photos to try again." },
   "browserAuthorizationUnsupported": { "message": "This browser does not support Chrome Google authorization for extensions. Use Google Chrome, or wait for an Edge-compatible OAuth build." },
-  "addingPhotos": { "message": "Adding photos…" },
-  "photosAdded": { "message": "$1 photo(s) added to ChatGPT." },
+  "addingPhotos": { "message": "Adding images or videos…" },
+  "photosAdded": { "message": "$1 media file(s) added to ChatGPT." },
+  "photosHandedOff": { "message": "$1 media file(s) handed to ChatGPT. Check the attachment area." },
+  "extensionUpdatedReload": { "message": "The extension was updated. Save any unsent draft, then refresh this ChatGPT page and try again." },
+  "videoDownloadPermissionMissing": { "message": "Video download permission is not active. Reload the extension and accept its video host permission if Chrome asks. (VIDEO_PERMISSION_MISSING)" },
+  "videoDownloadNetworkFailed": { "message": "Google video download failed. Check that your network can reach googlevideo.com and try again. (VIDEO_NETWORK_ERROR)" },
   "compatibilityWarnings": { "message": "$1 compatibility warning(s) are available in the extension popup." }
 }

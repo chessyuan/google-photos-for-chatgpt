@@ -1,6 +1,6 @@
 # Google Photos for ChatGPT
 
-Google Photos for ChatGPT is a local-first Chrome Extension that lets you select cloud photos with the official Google Photos Picker and attach them directly to a ChatGPT conversation.
+Google Photos for ChatGPT is a local-first Chrome Extension that lets you select cloud photos and ready videos with the official Google Photos Picker and attach them directly to a ChatGPT conversation.
 
 ```text
 ChatGPT → Google Photos Picker → select photos → Done
@@ -13,11 +13,11 @@ No Windows file chooser is opened, no photo is intentionally saved to Downloads,
 
 [简体中文](README.zh-CN.md) · [OAuth, privacy, and architecture](docs/OAUTH_PRIVACY_AND_ARCHITECTURE.md) · [Privacy Policy](PRIVACY.md) · [Security](SECURITY.md)
 
-## v1.1.0 release status
+## v1.2.0 pre-release
 
-The v1.1.0 code implements one-click Google authorization, but the maintainer's Google Cloud OAuth publishing and verification status cannot be verified from this repository. **v1.1.0 must not be presented as publicly available to every Google Account until the owner completes and documents the Google Cloud checks in [the verification checklist](docs/GOOGLE_OAUTH_VERIFICATION.md).**
+Pick photos and ready videos, reopen the Picker immediately for a second selection, and find the Photos button above the visible plus control in a widened composer. See the [v1.2.0 release](https://github.com/chessyuan/google-photos-for-chatgpt/releases/tag/v1.2.0) for the installable ZIP, upgrade steps, and video limitations.
 
-The latest published release remains v1.0.0 while this gate is unresolved.
+Public Google OAuth verification is pending confirmation. Some accounts may need test-user access. See the [OAuth verification checklist](docs/GOOGLE_OAUTH_VERIFICATION.md).
 
 ### Important notice for testers
 
@@ -35,7 +35,7 @@ Only continue when the consent screen says **Google Photos for ChatGPT** and req
 6. Sign in to and authorize your Google account the first time.
 7. Pick photos and press **Done**.
 
-After authorization, later clicks reuse a valid browser-session token and a pre-created standby Picker session. The visible Google Photos page is opened only after the user clicks.
+After authorization, later clicks reuse the account’s valid short-lived token and a pre-created standby Picker session. The visible Google Photos page is opened only after the user clicks.
 
 ## Features
 
@@ -105,11 +105,11 @@ Google account chooser (or explicit Chrome-profile fallback)
 → DELETE the Picker session
 ```
 
-The account-chooser build uses `chrome.identity.launchWebAuthFlow` with Google's `prompt=select_account`. The selected short-lived access token is kept only in `chrome.storage.session`; no refresh token or Client Secret exists in the extension. A developer build without the Web OAuth client falls back to `getAuthToken` and explicitly binds the token to the visible Chrome profile account.
+The account-chooser build uses `chrome.identity.launchWebAuthFlow` with Google's `prompt=select_account`. A short-lived access token survives restarts in trusted extension storage. Expiry or API rejection triggers a silent renewal only for the verified selected account; consent or sign-in still requires user interaction. No refresh token or Client Secret exists in the extension. A developer build without the Web OAuth client falls back to `getAuthToken` and explicitly binds the token to the visible Chrome profile account.
 
 ## Privacy
 
-The project has no custom backend, analytics, or telemetry. Google OAuth is managed by Chrome and Google Identity. OAuth tokens are never displayed to users, written to repository files, or sent to a project-controlled server. In account-chooser mode, the short-lived access token is stored only for the browser session through `chrome.storage.session` and is removed on disconnect or session end. Selected photo bytes are handled in browser memory and are given to ChatGPT only after the user explicitly selects them.
+The project has no custom backend, analytics, or telemetry. Google OAuth is managed by Chrome and Google Identity. OAuth tokens are never displayed to users, written to repository files, or sent to a project-controlled server. In chooser mode, a short-lived token and account binding are kept in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`, with a session copy, and are removed on disconnect. Google's token expiry remains authoritative. Selected photo bytes are handled in browser memory and are given to ChatGPT only after the user explicitly selects them.
 
 Read the full [Privacy Policy](PRIVACY.md), [简体中文隐私政策](PRIVACY.zh-CN.md), or the detailed [OAuth, privacy, and architecture guide](docs/OAUTH_PRIVACY_AND_ARCHITECTURE.md).
 
@@ -119,13 +119,15 @@ Read the full [Privacy Policy](PRIVACY.md), [简体中文隐私政策](PRIVACY.z
 |---|---|
 | `identity` | Obtains and refreshes Google OAuth tokens through Chrome Identity. |
 | `identity.email` | Displays and explicitly targets the current Chrome profile account when the account-chooser client is unavailable. |
-| `storage` | Stores temporary Picker/job state, the disconnect preference, and—only in chooser mode—the short-lived access token in `chrome.storage.session`. It never stores photo bytes. |
+| `storage` | Stores temporary Picker/job state, the disconnect preference, and chooser authorization in trusted extension storage. It never stores photo bytes. |
 | `activeTab` | Lets the popup act on the ChatGPT tab selected by the user. |
+| `scripting` | Reattaches the bundled content script to already-open ChatGPT tabs after extension updates, preserving page drafts. |
 | `alarms` | Expires and refreshes standby Picker sessions while the MV3 service worker sleeps. |
 | `https://chatgpt.com/*` | Adds the shortcut and hands selected files to the active ChatGPT composer. |
 | `https://photospicker.googleapis.com/*` | Creates, polls, lists, and deletes Picker sessions. |
 | `https://oauth2.googleapis.com/*` | Revokes the chooser-mode access token when the user disconnects. |
 | `https://lh3.googleusercontent.com/*` | Downloads only media returned by the user's Picker selection. |
+| `https://*.googlevideo.com/*` | Follows video download redirects to Google's video CDN. |
 
 The extension Content Security Policy allows local scripts only: `script-src 'self'; object-src 'self'`.
 
@@ -155,7 +157,8 @@ npm run verify:dist
 - ChatGPT is a frequently updated SPA without a stable third-party attachment API. The extension uses semantic elements and standard browser events, but future changes may require an update.
 - ChatGPT controls accepted file formats, file-size limits, multi-image limits, and server-side upload behavior.
 - WEBP, HEIC, and HEIF are passed through with their Google-provided MIME types, but ChatGPT may reject unsupported formats.
-- Videos returned by the Picker are skipped because this project targets image attachments.
+- Ready videos returned by the Picker are downloaded using Google's `=dv` endpoint and handed to a general file-upload input. Google may transcode them; the response MIME and filename are kept consistent. ChatGPT acceptance depends on the account and upload method.
+- Local memory safeguards: images up to 20 MB, videos up to 100 MB, and 200 MB per selection. These are extension limits, not a promise about account upload limits. Videos still processing in Google Photos are skipped with a warning.
 
 See [troubleshooting.md](troubleshooting.md) for diagnostics.
 
